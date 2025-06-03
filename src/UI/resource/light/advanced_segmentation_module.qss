@@ -1,0 +1,175 @@
+/* src/UI/resource/light/advanced_segmentation_module.qss */
+/* Styles for the Advanced Segmentation Module (Light Theme) */
+
+/* Overall pane (AdvancedSegmentationWidget) if it needs a base style */
+#advancedSegmentationPane {
+    background-color: #F5F5F5; /* Light background for the entire pane */
+}
+
+/* Styling for the main styled frames within the left, right, and bottom panels */
+AdvSegLeftPanel QFrame#advSegLeftStyledFrame,
+AdvSegRightPanel QFrame#advSegRightStyledFrame,
+AdvSegImageStrip QFrame#advSegImageStripStyledFrame {
+    background-color: #FFFFFF;
+    border-radius: 8px; /* Consistent rounded corners */
+    /* Shadow is applied programmatically */
+}
+
+/* GroupBoxes within Left and Right panels */
+AdvSegLeftPanel QGroupBox,
+AdvSegRightPanel QGroupBox {
+    font-size: 13pt; /* Consistent with other control panels */
+    font-weight: normal;
+    border: 1px solid #DCDCDC;
+    border-radius: 6px;
+    margin-top: 1ex;
+    padding: 1.5ex 10px 10px 10px;
+    color: #333333;
+}
+
+AdvSegLeftPanel QGroupBox::title,
+AdvSegRightPanel QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 5px;
+    left: 10px;
+    color: #333333;
+}
+
+/* Labels within GroupBoxes (e.g., "Model Selection", "Active Collection") */
+AdvSegLeftPanel QGroupBox BodyLabel,
+AdvSegLeftPanel QGroupBox StrongBodyLabel,
+AdvSegLeftPanel QGroupBox QLabel#modelDescriptionLabel, /* If objectName is set */
+AdvSegRightPanel QGroupBox BodyLabel,
+AdvSegRightPanel QGroupBox StrongBodyLabel,
+AdvSegRightPanel QGroupBox QLabel#maskNameLabel, /* If objectName is set */
+AdvSegRightPanel QGroupBox QLabel#maskColorLabel { /* If objectName is set */
+    font-size: 11pt; /* Approx +20% from typical 9pt BodyLabel */
+    color: #444444;
+    padding-bottom: 3px;
+}
+
+/* Specific Titles if they are SubtitleLabels or different class */
+AdvSegLeftPanel SubtitleLabel, /* e.g., Title for "Active Collection" if it's a SubtitleLabel */
+AdvSegRightPanel SubtitleLabel { /* e.g., Title for "Mask Creator" */
+    font-size: 14pt; /* Slightly larger for section titles */
+    font-weight: 500; /* Medium weight */
+    color: #222222;
+    padding-bottom: 5px;
+}
+
+
+/* Controls within Left and Right Panels */
+AdvSegLeftPanel ComboBox,
+AdvSegLeftPanel LineEdit,
+AdvSegLeftPanel PushButton,
+AdvSegLeftPanel PrimaryPushButton,
+AdvSegLeftPanel ToolButton,
+AdvSegLeftPanel TogglePushButton,
+AdvSegRightPanel LineEdit,
+AdvSegRightPanel PushButton,
+AdvSegRightPanel PrimaryPushButton,
+AdvSegRightPanel ToolButton {
+    font-size: 11pt; /* Consistent font size for controls */
+    /* Other Fluent defaults for padding, border, etc., will apply */
+}
+
+AdvSegLeftPanel PushButton#fineTuneButton { /* Example specific button */
+    /* Add specific styling if needed */
+}
+
+/* Active Masks List (Right Panel) */
+AdvSegRightPanel ListWidget { /* Assuming the QListWidget for masks gets an objectName or is targeted like this */
+    background-color: #F9F9F9;
+    border: 1px solid #E0E0E0;
+    border-radius: 4px;
+    padding: 4px;
+}
+/* Items within ActiveMaskItemWidget are styled by its own QSS */
+
+/* ActiveMaskItemWidget (the card itself) styling */
+ActiveMaskItemWidget#activeMaskItemCard {
+    background-color: #FFFFFF;
+    border: 1px solid #E0E0E0;
+    border-radius: 6px;
+    padding: 5px; /* Padding inside the card */
+}
+
+ActiveMaskItemWidget#activeMaskItemCard:hover {
+    background-color: #F0F7FF; /* Light blue hover */
+}
+
+ActiveMaskItemWidget QLabel, /* General labels within ActiveMaskItemWidget */
+ActiveMaskItemWidget BodyLabel {
+    font-size: 10pt; /* Slightly smaller for dense item info */
+    color: #333333;
+}
+ActiveMaskItemWidget BodyLabel[objectName="opacity_value_label"] { /* If name set */
+    font-size: 9pt;
+    color: #555555;
+}
+
+ActiveMaskItemWidget QFrame#colorIndicatorFrame { /* If color indicator frame has objectName */
+    border-radius: 8px; /* Make it a circle if width/height are equal */
+}
+
+ActiveMaskItemWidget Slider {
+    /* Default Fluent Slider styles are usually good */
+}
+ActiveMaskItemWidget ToolButton {
+    /* Default Fluent ToolButton styles */
+}
+
+
+/* Image Strip Styles */
+AdvSegImageStrip#advSegImageStripContainer {
+    /* Container itself, usually transparent or matches parent */
+}
+
+AdvSegImageStrip QFrame#advSegImageStripStyledFrame {
+    background-color: #FFFFFF;
+    border-radius: 6px; /* Top radius for strip look */
+    /* No bottom border if it sits on something else */
+}
+
+AdvSegImageStrip QListWidget { /* The list widget holding strip cards */
+    background-color: transparent;
+    border: none;
+    padding: 2px; /* Minimal padding */
+}
+AdvSegImageStrip QListWidget::item {
+    /* Minimal margin, card itself has padding/border */
+    margin: 0px 2px; 
+}
+
+/* Strip Card Widget (AdvSegStripCardWidget) */
+/* Mostly handled by its paintEvent for dynamic borders. 
+   This QSS can set base properties if AdvSegStripCardWidget is a QFrame and has an objectName.
+   If it's a QWidget with only paintEvent, QSS is less effective for its main look.
+*/
+AdvSegStripCardWidget { /* Target by class name if no objectName needed */
+    background-color: #f7f7f7; /* Base background for cards */
+    border-radius: 6px;
+}
+
+AdvSegStripCardWidget QLabel#thumbnailImageLabel { /* If the QLabel inside has an objectName */
+    /* Styles for the image placeholder text if pixmap is null */
+    color: #888888;
+    font-size: 9pt;
+}
+
+AdvSegImageStrip ToolButton { /* For prev/next buttons */
+    /* Default Fluent styles, or customize size/icon color */
+}
+
+/* Canvas Widget (AdvSegCanvasWidget) */
+AdvSegCanvasWidget#advSegCanvas {
+    background-color: #EAEAEA; /* Neutral background for canvas area */
+    border-radius: 6px;
+    border: 1px solid #D0D0D0; /* Optional border for canvas */
+}
+
+AdvSegCanvasWidget QLabel { /* For the "Image Canvas Area" placeholder */
+    font-size: 16pt;
+    color: #AAAAAA;
+}

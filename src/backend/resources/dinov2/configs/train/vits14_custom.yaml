@@ -1,0 +1,146 @@
+# config_continued_pretrain_vits14_reg_cells.yaml
+
+# --- Where to load initial weights from ---
+MODEL:
+  WEIGHTS: "" 
+
+# --- Mixed Precision & FSDP ---
+# These are generally good defaults from DINOv2 for ViT-S/B/L
+compute_precision:
+  grad_scaler: true # Use mixed precision with a gradient scaler
+  teacher:
+    backbone:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+    dino_head: # Assuming shared head as per your SSL default
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+    ibot_head: # Assuming shared head
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+  student:
+    backbone:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp16
+        buffer_dtype: fp32
+    dino_head: # Student head might use fp32 for reduction for stability
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp32 # Changed from fp16 for student head as per DINOv2 default
+        buffer_dtype: fp32
+    ibot_head:
+      sharding_strategy: SHARD_GRAD_OP
+      mixed_precision:
+        param_dtype: fp16
+        reduce_dtype: fp32 # Changed from fp16 for student head
+        buffer_dtype: fp32
+
+# --- SSL Objective Settings (DINO & iBOT) ---
+# These are standard DINOv2 settings, should be fine for continued pre-training.
+dino:
+  loss_weight: 1.0
+  head_n_prototypes: 65536 # Default for ViT-S/B/L
+  head_bottleneck_dim: 256
+  head_nlayers: 3
+  head_hidden_dim: 2048
+  koleo_loss_weight: 0.1
+ibot:
+  loss_weight: 1.0
+  mask_sample_probability: 0.5
+  mask_ratio_min_max: [0.1, 0.5]
+  separate_head: false # iBOT uses the DINO head
+  # The following are only used if separate_head is true
+  # head_n_prototypes: 65536
+  # head_bottleneck_dim: 256
+  # head_nlayers: 3
+  # head_hidden_dim: 2048
+
+# --- Training Settings ---
+train:
+  # batch_size_per_gpu: Will be set by CLI --batch-size-per-gpu
+  # dataset_path: Will be set by CLI --dataset-path
+  # output_dir: Will be set by CLI --output-dir
+  # num_workers: Will be set by CLI --num-workers
+  # seed: Will be set by CLI --seed
+  # gradient_accumulation_steps: Will be set by CLI --gradient-accumulation-steps
+
+  OFFICIAL_EPOCH_LENGTH: 750 # From your previous command, defines iterations per "epoch"
+  saveckp_freq: 30 # Corresponds to --save-checkpoint-freq-epochs (20 * 250 = 5000 iters)
+  cache_dataset: true # Can set to false if dataset is too large for RAM
+  centering: "centering" # DINOv2 default, "sinkhorn_knopp" is also an option
+
+# --- Student Model Architecture (ViT-S/14) ---
+student:
+  arch: vit_small
+  patch_size: 14
+  
+  drop_path_rate: 0.1        # Reduced from 0.4 for continued pre-training/smaller dataset
+  layerscale: 1.0e-05        # Standard DINOv2 value
+  drop_path_uniform: true    # Standard DINOv2 value
+  ffn_layer: "mlp"           # CRITICAL: ViT-S/B/L use MLP, ViT-G uses swiglufused
+  block_chunks: 0            # For ViT-S, 0 or 1 is fine. FSDP wrapping strategy.
+  qkv_bias: true             # Standard DINOv2 value
+  proj_bias: true            # Standard DINOv2 value
+  ffn_bias: true             # Standard DINOv2 value
+  # pretrained_weights: This field in student usually for loading different student weights,
+  #                     MODEL.WEIGHTS is for the main model initialization.
+
+# --- Teacher Model Settings ---
+# Teacher architecture is implicitly the same as student in SSLMetaArch
+teacher:
+  momentum_teacher: 0.996       # Standard DINOv2, can adjust slightly for shorter runs
+  final_momentum_teacher: 1.0   # Standard DINOv2
+  warmup_teacher_temp: 0.04     # Standard DINOv2
+  teacher_temp: 0.07            # Standard DINOv2
+  warmup_teacher_temp_epochs: 5 # Reduced for shorter continued pre-training
+
+# --- Optimizer Settings ---
+optim:
+  # epochs: Will be set by CLI --epochs
+  # lr: Will be set by CLI --lr (or use base_lr here and let scaling rule apply)
+  # warmup_epochs: Will be set by CLI --warmup-epochs
+  # min_lr: Will be set by CLI --min-lr
+  # weight_decay: Will be set by CLI --weight-decay
+
+  # For continued pre-training, set a smaller base_lr and warmup
+  base_lr: 2e-5              # Small base LR for continued pre-training (for effective_batch_size=1024)
+  warmup_epochs: 2           # Reduced warmup (2 * 250 = 500 warmup iters)
+  min_lr: 1e-6               # Standard
+  
+  weight_decay: 0.04         # Initial weight decay
+  weight_decay_end: 0.1      # Less aggressive increase for shorter runs, or set to initial WD
+  
+  clip_grad: 3.0             # Standard DINOv2
+  freeze_last_layer_epochs: 0 # Usually 0 or 1 for DINOv2 pre-training
+  scaling_rule: "sqrt_wrt_1024" # Standard DINOv2 LR scaling
+  patch_embed_lr_mult: 0.2   # Standard DINOv2
+  layerwise_decay: 0.8       # Apply LLRD to protect early layers
+  adamw_beta1: 0.9
+  adamw_beta2: 0.999
+
+# --- Crop Settings ---
+crops:
+  global_crops_scale: [0.35, 1.0] # Matches your previous SSL default, good starting point
+  local_crops_number: 8           # Standard DINOv2
+  local_crops_scale: [0.15, 0.35] # Matches your previous SSL default, adjust based on cell size
+  global_crops_size: 224          # Standard for ViT-S/14
+  local_crops_size: 98            # Standard, adjust based on visualization
+
+# --- Evaluation (k-NN settings will mostly come from CLI) ---
+evaluation:
+  # eval_period_iterations: This is for DINOv2's internal eval, not k-NN.
+  # k-NN is controlled by --knn-eval-freq-epochs.
+  # Set to a large value if not using DINOv2's specific eval like linear probing during SSL.
+  eval_period_iterations: 1000000 # Effectively disable DINOv2's own eval during SSL

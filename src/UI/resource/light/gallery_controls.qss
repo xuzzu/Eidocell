@@ -1,0 +1,21 @@
+/* src/UI/resource/light/gallery_controls.qss */
+/* Styles for GalleryControls */
+
+GalleryControls QFrame#galleryControlsFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+}
+
+GalleryControls QLabel#scaleLabel,
+GalleryControls QLabel#actionsLabel,
+GalleryControls QLabel#viewOptionsLabel { 
+    /* Original: 13pt */
+    font-size: 16pt;
+    color: #333333; 
+}
+
+GalleryControls QLabel#sortLabel { 
+    color: #555555;
+    /* Original: 10pt */
+    font-size: 12pt; 
+}

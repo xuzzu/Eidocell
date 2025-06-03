@@ -1,0 +1,37 @@
+/* src/UI/resource/light/classes_view_widget.qss */
+/* scope all rules to the single view */
+#classesView QFrame#classCreationTreeFrame {
+    background: white;
+    border-radius: 8px;
+}
+
+/* section titles */
+#classesView QLabel#creationTitleLabel,
+#classesView QLabel#colorSelectionLabel {
+    /* Original: 11pt */
+    font-size: 13pt;
+    font-weight: 300; 
+    color: #444;
+}
+
+/* colour-picker squares */
+#classesView PushButton[class="colorPaletteButton"] {
+    border-radius: 3px;
+    border: 1px solid transparent;
+}
+#classesView PushButton[class="colorPaletteButton"]:hover   { border: 1px solid #707070; }
+#classesView PushButton[class="colorPaletteButton"]:checked { border: 2px solid black; }
+
+/* tree header */
+#classesView QLabel#classHierarchyTreeLabel {
+    color: #333;
+    background: #F9F9F9;
+    padding: 5px;
+    border-bottom: 1px solid #D0D0D0;
+    /* Original: 11pt */
+    font-size: 13pt;
+}
+
+#classesView PushButton {
+    font-size: 11pt;
+}

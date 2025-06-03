@@ -1,0 +1,27 @@
+/* src/UI/resource/light/export_dialog.qss */
+/* Styles for ExportDialog */
+
+ExportDialog SubtitleLabel#descriptionLabel { 
+    /* Original: 16px */
+    font-size: 19px; 
+    font-weight: bold;
+    color: #222222; 
+}
+
+ExportDialog QLabel#folderPathLabel { 
+    /* Original: 14px */
+    font-size: 17px;
+    color: #555555;
+}
+
+ExportDialog CheckBox { 
+    /* Original: 14px */
+    font-size: 17px;
+    spacing: 8px; 
+    color: #333333;
+}
+
+/* You can also style PushButton specifically for this dialog if needed */
+ExportDialog PushButton#chooseFolderButton { 
+    /* Example: font-size: 17px; */
+}

@@ -1,0 +1,42 @@
+/* src/UI/resource/light/classes_tree_view.qss */
+/* Styles for the Class TreeView (QTreeWidget) */
+
+/* Assuming self.class_tree_view gets an objectName, e.g., "classHierarchyTree" */
+QTreeWidget#classHierarchyTree {
+    background-color: #F9F9F9;
+    border: none;
+    padding: 5px;
+    /* Original: 14px */
+    font-size: 17px; 
+    border-radius: 8px; 
+}
+
+QTreeWidget#classHierarchyTree::item {
+    padding-left: 5px; 
+    padding-top: 3px;
+    padding-bottom: 3px;
+    height: auto; 
+    border-radius: 4px; 
+    color: #212121;
+    /* Inherits font-size from QTreeWidget */
+}
+
+QTreeWidget#classHierarchyTree::item:hover {
+    background-color: #E0E0E0;
+}
+
+QTreeWidget#classHierarchyTree::item:selected {
+    background-color: #0078D4; 
+    color: white;
+}
+
+/* Branch indicators */
+QTreeWidget#classHierarchyTree::branch:has-children:!has-siblings:closed,
+QTreeWidget#classHierarchyTree::branch:closed:has-children:has-siblings {
+    /* image: url(:/qfluentwidgets/images/tree_view/branch_closed_black.svg); Example for Fluent */
+}
+
+QTreeWidget#classHierarchyTree::branch:open:has-children:!has-siblings,
+QTreeWidget#classHierarchyTree::branch:open:has-children:has-siblings {
+    /* image: url(:/qfluentwidgets/images/tree_view/branch_open_black.svg); Example for Fluent */
+}

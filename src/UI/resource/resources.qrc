@@ -1,0 +1,34 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/eidocell">
+    <!-- QSS files for light theme -->
+    <file alias="qss/light/advanced_segmentation_module.qss">light/advanced_segmentation_module.qss</file>
+    <file alias="qss/light/session_management_module.qss">light/session_management_module.qss</file>
+    <file alias="qss/light/class_cluster_summary.qss">light/class_cluster_summary.qss</file>
+    <file alias="qss/light/gallery_controls.qss">light/gallery_controls.qss</file>
+    <file alias="qss/light/preview_grid.qss">light/preview_grid.qss</file>
+    <file alias="qss/light/export_dialog.qss">light/export_dialog.qss</file>
+    <file alias="qss/light/segmentation_controls.qss">light/segmentation_controls.qss</file>
+    <file alias="qss/light/clusters_control_panel.qss">light/clusters_control_panel.qss</file>
+    <file alias="qss/light/classes_tree_view.qss">light/classes_tree_view.qss</file>
+    <file alias="qss/light/gallery_container.qss">light/gallery_container.qss</file>
+    <file alias="qss/light/flow_gallery.qss">light/flow_gallery.qss</file>
+    <file alias="qss/light/settings_dialog.qss">light/settings_dialog.qss</file>
+    <file alias="qss/light/classes_view_widget.qss">light/classes_view_widget.qss</file>
+    <file alias="qss/light/analysis_control_panel.qss">light/analysis_control_panel.qss</file>
+    <file alias="qss/light/histogram_config_widget.qss">light/histogram_config_widget.qss</file>
+    <file alias="qss/light/scatter_config_widget.qss">light/scatter_config_widget.qss</file>
+    <!-- Add other QSS files for light theme as you create them -->
+
+    <!-- Global theme files -->
+    <file alias="themes/light/global.qss">light/demo.qss</file> <!-- Renamed demo.qss to global.qss for clarity -->
+    <file alias="themes/dark/global.qss">dark/demo.qss</file>   <!-- Renamed demo.qss to global.qss for clarity -->
+
+    <!-- Example for APP_ICON_PATH if it's in, say, src/UI/resource/assets/app_icon.png -->
+    <!-- <file alias="images/app_icon.png">assets/app_icon.png</file> -->
+
+    <!-- Add other images/icons here -->
+    <!-- <file alias="icons/arrow_closed.png">assets/icons/arrow_closed.png</file> -->
+    <!-- <file alias="icons/arrow_open.png">assets/icons/arrow_open.png</file> -->
+
+</qresource>
+</RCC>

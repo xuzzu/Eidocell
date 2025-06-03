@@ -1,0 +1,46 @@
+/* src/UI/resource/light/clusters_control_panel.qss */
+/* Styles for ControlPanel (Clusters) */
+
+ControlPanel QFrame#controlPanelStyledFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+}
+
+ControlPanel QLabel#panelTitleLabel { 
+    font-size: 19pt;
+    font-weight: normal; /* Standardized */
+    color: #222222; /* Standardized */
+    padding-bottom: 10px; /* Added for consistency */
+}
+
+/* Styling for QGroupBoxes within the ControlPanel */
+ControlPanel QGroupBox {
+    font-size: 13pt;
+    font-weight: normal; 
+    border: 1px solid #DEDEDE;
+    border-radius: 6px;
+    margin-top: 1ex;
+    padding: 1.5ex 8px 8px 8px; 
+    color: #333333;
+}
+
+ControlPanel QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 5px; 
+    left: 10px;
+    color: #333333; 
+}
+
+/* Styles for BodyLabels within parameter widgets */
+ControlPanel PCAParamsWidget BodyLabel, 
+ControlPanel UMAPParamsWidget BodyLabel,
+ControlPanel BodyLabel#clustersLabel { 
+    font-size: 13pt;
+    font-weight: 300; 
+    color: #444444;
+}
+
+ControlPanel PushButton {
+    font-size: 11pt;
+}

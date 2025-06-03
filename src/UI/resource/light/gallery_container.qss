@@ -1,0 +1,33 @@
+/* src/UI/resource/light/gallery_container.qss */
+/* Styles for GalleryContainer */
+
+GalleryContainer QFrame#galleryContainerFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+    /* Shadow is applied programmatically */
+}
+
+/* Styles for the GalleryView (QListView) inside GalleryContainer */
+/* This assumes GalleryView is a direct child or specifically named */
+GalleryContainer GalleryView { /* Or GalleryContainer QListView if GalleryView doesn't have an objectName */
+    border: none;
+    background-color: transparent; /* The frame provides the white background */
+    padding: 5px; /* Add some padding around the items within the view */
+}
+
+/* Scrollbar styling can also go here if specific to this GalleryView instance */
+GalleryContainer GalleryView QScrollBar:vertical {
+    border: none;
+    background: #F0F0F0;
+    width: 10px;
+    margin: 0px 0px 0px 0px; /* No margin if scrollbar is inside padding */
+    border-radius: 5px;
+}
+GalleryContainer GalleryView QScrollBar::handle:vertical {
+    background: #BDBDBD;
+    min-height: 20px;
+    border-radius: 5px;
+}
+GalleryContainer GalleryView QScrollBar::handle:vertical:hover {
+    background: #9E9E9E;
+}

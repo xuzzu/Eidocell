@@ -1,0 +1,16 @@
+/* src/UI/resource/light/preview_grid.qss */
+/* Styles for PreviewGrid */
+
+PreviewGrid#previewGridFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+}
+
+PreviewGrid QLabel.previewImageLabel { 
+    background-color: #F0F0F0; 
+    border: 1px solid #CCCCCC;
+    border-radius: 4px;
+    color: #757575; 
+    /* Original: 9pt */
+    font-size: 11pt;
+}

@@ -1,0 +1,46 @@
+/* src/UI/resource/light/class_cluster_summary.qss */
+/* Styles for ClassClusterSummary Dialog */
+
+ClassClusterSummary QLabel#titleLabel { 
+    /* Original: 18pt */
+    font-size: 22pt;
+    font-weight: bold;
+    color: #333333; 
+}
+
+ClassClusterSummary QLabel#samplesLabel { 
+    /* Original: 12pt */
+    font-size: 14pt;
+    color: #757575; 
+}
+
+ClassClusterSummary QTableWidget {
+    background-color: #FFFFFF;
+    border: 1px solid #CCCCCC;
+    gridline-color: #E0E0E0; 
+    /* Assuming default item font size is around 10pt, new size ~12pt */
+    font-size: 12pt;
+}
+
+ClassClusterSummary QTableWidget::item {
+    padding: 8px;
+    border-bottom: 1px solid #EEEEEE; 
+    color: #212121;
+}
+
+ClassClusterSummary QTableWidget::item:selected {
+    background-color: #E3F2FD; 
+    color: #1E88E5;
+}
+
+ClassClusterSummary QHeaderView::section {
+    background-color: #F5F5F5;
+    padding: 8px;
+    font-weight: bold;
+    border: 1px solid #D0D0D0; 
+    border-left: none;
+    border-top: none; 
+    color: #424242;
+    /* Assuming default header font size is around 10pt, new size ~12pt */
+    font-size: 12pt; 
+}

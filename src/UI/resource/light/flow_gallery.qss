@@ -1,0 +1,50 @@
+/* src/UI/resource/light/flow_gallery.qss */
+/* Styles for FlowGallery */
+
+FlowGallery#FlowGalleryFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+    /* Shadow is applied programmatically */
+}
+
+FlowGallery QScrollArea#FlowGalleryScrollArea {
+    border: none;
+    background-color: transparent; /* Inherits from FlowGalleryFrame */
+}
+
+FlowGallery QWidget#FlowGalleryContainer { /* The widget inside QScrollArea */
+    background-color: transparent;
+    padding: 10px; /* Padding for the items within the flow layout */
+}
+
+/* Scrollbar Styles for FlowGalleryScrollArea */
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar:vertical {
+    border: none;
+    background: #F0F0F0; /* Light grey track for scrollbar */
+    width: 10px;
+    margin: 0px; /* Adjusted if scroll_area has padding */
+    border-radius: 5px;
+}
+
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::handle:vertical {
+    background: #BDBDBD; /* Medium grey handle */
+    min-height: 25px;
+    border-radius: 5px;
+}
+
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::handle:vertical:hover {
+    background: #9E9E9E; /* Darker grey handle on hover */
+}
+
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::add-line:vertical,
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::sub-line:vertical {
+    border: none;
+    height: 0px;
+    width: 0px;
+    background: none;
+}
+
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::add-page:vertical,
+FlowGallery QScrollArea#FlowGalleryScrollArea QScrollBar::sub-page:vertical {
+    background: none;
+}

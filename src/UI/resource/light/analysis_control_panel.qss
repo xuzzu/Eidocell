@@ -1,0 +1,41 @@
+/* src/UI/resource/light/analysis_control_panel.qss */
+/* Styles for AnalysisControlPanel (Light Theme) */
+
+/* Styles the main styled frame within AnalysisControlPanel */
+AnalysisControlPanel QFrame#analysisControlPanelStyledFrame {
+    background-color: #FFFFFF;
+    border-radius: 10px;
+}
+
+/* Styles the main title label within the panel */
+AnalysisControlPanel QLabel#panelTitleLabel { 
+    font-size: 19pt; 
+    font-weight: normal; /* Standardized (was already normal) */
+    color: #222222; /* Standardized */
+    padding-bottom: 10px; /* Standardized (was already present) */
+}
+
+/* General styling for QGroupBoxes within AnalysisControlPanel */
+AnalysisControlPanel QGroupBox {
+    font-size: 13pt;
+    font-weight: normal;
+    border: 1px solid #DCDCDC;
+    border-radius: 6px;
+    margin-top: 1ex; 
+    padding: 1.5ex 10px 10px 10px; 
+    color: #333333;
+}
+
+AnalysisControlPanel QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 5px; 
+    left: 10px; 
+    color: #333333;
+}
+
+AnalysisControlPanel QGroupBox QLabel {
+    font-size: 12pt;
+    color: #444444;
+    padding-bottom: 3px;
+}

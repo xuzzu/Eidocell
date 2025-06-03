@@ -1,0 +1,20 @@
+# vits14_cells.yaml  (put it under dinov2/configs/train/)
+model:
+  name: vit_small
+  patch_size: 14   # keep the patch size of the public weights
+
+train:
+  epochs: 40       # ≈ 1-2 epochs over 10 M images is plenty
+  batch_size_per_gpu: 64   # fits on a 24 GB RTX 4080 with fp16+xFormers
+  num_workers: 8
+  output_dir: ./outputs/dinov2_cells
+  pretrained_weights: ./ckpts/dinov2_vits14_pretrain.pth   # student init
+  teacher_pretrained_weights: ./ckpts/dinov2_vits14_pretrain.pth
+  auto_resume: false        # new run → fresh logs
+  warmup_teacher_temp_epochs: 0  # we are *continuing* training
+
+data:
+  dataset_path: ImageFolder:root=/datasets/cells_dataset
+  crop_size: 224          # your images are already small
+  local_crops_number: 6   # lighter multi-crop schedule
+  local_crop_size: 96

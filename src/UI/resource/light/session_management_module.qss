@@ -1,0 +1,101 @@
+/* Styles for the Session Management Module (Light Theme) */
+
+/* --- SessionManagementDialog (main dialog) --- */
+/* Styles for SessionManagementDialog (MessageBoxBase) can be minimal if Fluent defaults are fine */
+/* Targeting specific named children if needed */
+
+SessionManagementDialog SubtitleLabel#existingSessionsTitleLabel { /* If the "Existing Sessions" label gets an objectName */
+    padding-bottom: 5px;
+    color: #111111;
+    /* font-size: 14pt; Let SubtitleLabel default handle this or be more specific */
+}
+
+SessionManagementDialog ListWidget#sessionListWidget {
+    background-color: #F0F0F0;
+    border: 1px solid #DEDEDE;
+    border-radius: 6px;
+    padding: 5px;
+}
+
+SessionManagementDialog ListWidget#sessionListWidget::item {
+    padding: 6px 8px;
+    border-radius: 4px;
+    color: #212121;
+}
+
+SessionManagementDialog ListWidget#sessionListWidget::item:selected {
+    background-color: #0078D4; /* Fluent accent */
+    color: white;
+}
+
+SessionManagementDialog ListWidget#sessionListWidget::item:hover {
+    background-color: #E0E0E0;
+}
+
+/* PushButton, PrimaryPushButton in SessionManagementDialog action bar */
+/* Rely on Fluent defaults unless specific margin/padding is needed for layout */
+SessionManagementDialog #buttonLayout PushButton, /* Target buttons in the standard button layout */
+SessionManagementDialog #buttonLayout PrimaryPushButton {
+    /* Example: margin-left: 5px; */
+}
+
+
+/* --- SessionFormWidget (Right Pane Form) --- */
+SessionFormWidget QFrame#sessionFormStyledFrame {
+    background-color: white;
+    border-radius: 8px;
+    /* Shadow is applied programmatically */
+}
+
+SessionFormWidget QGroupBox {
+    font-size: 11pt;
+    font-weight: normal;
+    border: 1px solid #DEDEDE;
+    border-radius: 6px;
+    margin-top: 1ex;
+    padding: 1.5ex 8px 8px 8px;
+    color: #333333;
+}
+
+SessionFormWidget QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 5px;
+    left: 10px;
+    color: #333333;
+}
+
+SessionFormWidget BodyLabel {
+    padding-bottom: 3px;
+    color: #444444;
+    font-size: 9pt; /* Consistent control label size */
+}
+
+SessionFormWidget LineEdit,
+SessionFormWidget ComboBox,
+SessionFormWidget PushButton,
+SessionFormWidget CheckBox {
+    font-size: 9pt; /* Consistent control font size */
+    /* Rely on Fluent for detailed styling */
+}
+
+SessionFormWidget LineEdit#dataFolderPathEdit { /* Example for specific line edit */
+    /* If specific styling is needed */
+}
+
+SessionFormWidget ListWidget { /* For metadata_files_list */
+    border: 1px solid #DCDCDC;
+    border-radius: 4px;
+    background-color: #FAFAFA;
+    min-height: 80px; /* Give it some default height */
+}
+
+SessionFormWidget ListWidget::item {
+    padding: 4px;
+    color: #333333;
+}
+
+SessionFormWidget ListWidget::item:selected {
+    background-color: #E1F5FE;
+    color: #0277BD;
+}

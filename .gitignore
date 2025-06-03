@@ -1,0 +1,15 @@
+src/UI/temp
+sessions/ 
+temp/
+__pycache__/ 
+ 
+.env 
+.vscode 
+ 
+*.onnx 
+*.pth 
+*.pt
+*.h5 
+*.pyc 
+*.DS_Store 
+*.txt

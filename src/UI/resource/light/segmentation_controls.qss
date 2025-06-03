@@ -1,0 +1,17 @@
+/* src/UI/resource/light/segmentation_controls.qss */
+/* Styles for SegmentationControls */
+
+SegmentationControls#segmentationControlsFrame { 
+    background-color: #FFFFFF;
+    border-radius: 10px;
+}
+
+SegmentationControls QLabel#methodLabel,
+SegmentationControls QLabel#parameterLabel,
+SegmentationControls QLabel#parameterLabel2 { 
+    /* Original: 11pt */
+    font-size: 13pt; 
+    font-weight: 300; 
+    color: #444444; 
+    padding-bottom: 3px; 
+}
