@@ -106,7 +106,6 @@ class TaskManager:
             if task.status != TaskStatus.CANCELLED:
                 task.status = TaskStatus.COMPLETED
                 logger.info("Task completed: %s [%s]", task.name, task_id)
-                # Local import to prevent circular dependence
                 from core.notifications import notification_manager
                 notification_manager.broadcast("Task Completed", f"Successfully finished {task.name}.", level="success")
         except TaskCancelledException:

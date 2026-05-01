@@ -1,15 +1,29 @@
-"""Dimensionality reduction service: project features into 2D/3D for visualization."""
+"""Dimensionality reduction service: project features into 2D/3D for visualization.
 
-import numpy as np
+Runs as a background task — UMAP/t-SNE on tens of thousands of points can be
+multi-second to multi-minute work, so the request returns a task_id immediately
+and clients poll via /tasks/{id}.
+"""
+
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session as DbSession
 
+from core.processors.errors import UnknownProcessorError
 from core.processors.inference.dimensionality_reduction import (
-    get_processor,
     DR_REGISTRY,
+    get_processor,
 )
-from core.utils import load_session_features, get_active_samples
-from models.models import Session, Sample
+from core.task_manager import task_manager
+from core.utils import load_session_features
+from services._pipeline_utils import (
+    clean_zero_variance,
+    task_context,
+    validate_session_and_active_samples,
+)
+
+logger = logging.getLogger("eidocell.dr")
 
 
 def run_dimensionality_reduction(
@@ -18,61 +32,84 @@ def run_dimensionality_reduction(
     method: str,
     n_components: int,
     params: dict,
-) -> dict:
+) -> str:
+    """Submit dimensionality reduction as a background task. Returns task_id."""
     try:
-        processor = get_processor(method)
-    except ValueError as e:
+        get_processor(method)
+    except UnknownProcessorError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    session = db.query(Session).filter(Session.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    samples = get_active_samples(db, session_id)
-    if not samples:
-        raise HTTPException(status_code=400, detail="No active samples")
-
-    indices = [s.storage_index for s in samples]
-    features = load_session_features(session.session_folder, indices)
-
-    # Check for zero-variance features and remove them
-    stds = np.std(features, axis=0)
-    valid_cols = stds > 0
-    if not np.any(valid_cols):
+    session, samples = validate_session_and_active_samples(db, session_id)
+    if len(samples) < n_components:
         raise HTTPException(
             status_code=400,
-            detail="All features have zero variance. Cannot reduce dimensionality.",
-        )
-    features_clean = features[:, valid_cols]
-
-    if features_clean.shape[0] < n_components:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Need at least {n_components} samples, got {features_clean.shape[0]}",
+            detail=f"Need at least {n_components} samples, got {len(samples)}",
         )
 
-    embeddings = processor.fit_transform(
-        features_clean, n_components=n_components, **params
-    )
-
-    # Build response with sample info
-    result_embeddings = []
-    for i, s in enumerate(samples):
-        entry = {
-            "sample_id": s.id,
+    sample_meta = [
+        {
+            "id": s.id,
             "filename": s.filename,
             "class_id": s.class_id,
-            "x": float(embeddings[i, 0]),
-            "y": float(embeddings[i, 1]),
+            "storage_index": s.storage_index,
         }
-        if n_components == 3:
-            entry["z"] = float(embeddings[i, 2])
-        result_embeddings.append(entry)
+        for s in samples
+    ]
+
+    return task_manager.submit(
+        name=f"Dimensionality reduction ({method})",
+        func=_background_dr,
+        session_folder=session.session_folder,
+        sample_meta=sample_meta,
+        method=method,
+        n_components=n_components,
+        params=params or {},
+    )
+
+
+def _background_dr(
+    *,
+    session_folder: str,
+    sample_meta: list[dict],
+    method: str,
+    n_components: int,
+    params: dict,
+    on_progress,
+    is_cancelled=None,
+):
+    """Run dimensionality reduction in a background thread."""
+    with task_context(on_progress, is_cancelled, total=4) as ctx:
+        ctx.stage("Loading features...", advance=1)
+        indices = [s["storage_index"] for s in sample_meta]
+        features = load_session_features(session_folder, indices)
+
+        ctx.stage("Cleaning features...", advance=1)
+        features_clean = clean_zero_variance(features, raise_on_all_zero=True)
+
+        ctx.stage(f"Fitting {method.upper()}...", advance=1)
+        processor = get_processor(method)
+        embeddings = processor.fit_transform(
+            features_clean, n_components=n_components, **params
+        )
+
+        ctx.stage("Building response...", advance=1)
+        result_embeddings = []
+        for i, s in enumerate(sample_meta):
+            entry = {
+                "sample_id": s["id"],
+                "filename": s["filename"],
+                "class_id": s["class_id"],
+                "x": float(embeddings[i, 0]),
+                "y": float(embeddings[i, 1]),
+            }
+            if n_components == 3:
+                entry["z"] = float(embeddings[i, 2])
+            result_embeddings.append(entry)
 
     return {
         "method": method,
         "n_components": n_components,
-        "n_samples": len(samples),
+        "n_samples": len(sample_meta),
         "embeddings": result_embeddings,
     }
 

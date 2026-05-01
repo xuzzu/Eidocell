@@ -7,19 +7,41 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from core.processors.errors import (
+    ProcessorInputError,
+    UnknownProcessorError,
+)
+
 
 class FeatureExtractionProcessor(ABC):
     """Interface for feature extraction from images."""
 
     @abstractmethod
     def extract(self, image: np.ndarray) -> np.ndarray:
-        """Extract a 1-D feature vector from a single image."""
+        """Extract a 1-D feature vector from a single image.
+
+        Should raise ProcessorInputError for invalid input shape/dtype, and
+        ProcessorRuntimeError for downstream failures.
+        """
         ...
 
     @abstractmethod
     def feature_dim(self) -> int:
         """Return the dimensionality of the feature vector."""
         ...
+
+    def validate_input(self, image: np.ndarray) -> None:
+        """Raise ProcessorInputError if `image` cannot be processed.
+
+        Default implementation rejects None/empty arrays; subclasses override
+        for shape/channel/dtype constraints specific to their model.
+        """
+        if image is None:
+            raise ProcessorInputError("image is None")
+        if not isinstance(image, np.ndarray):
+            raise ProcessorInputError(f"expected ndarray, got {type(image).__name__}")
+        if image.size == 0:
+            raise ProcessorInputError("image is empty")
 
 
 class MorphologicalFeatureExtraction(FeatureExtractionProcessor):
@@ -49,12 +71,14 @@ class MorphologicalFeatureExtraction(FeatureExtractionProcessor):
     ]
 
     def extract(self, image: np.ndarray) -> np.ndarray:
-        raise NotImplementedError(
+        raise ProcessorInputError(
             "MorphologicalFeatureExtraction operates on pre-computed attributes, "
             "not raw images. Use extract_from_attributes() instead."
         )
 
     def extract_from_attributes(self, attrs: dict) -> np.ndarray:
+        if not attrs:
+            raise ProcessorInputError("mask attributes are missing or empty")
         return np.array([attrs.get(k, 0.0) for k in self.FEATURE_KEYS], dtype=np.float32)
 
     def feature_dim(self) -> int:
@@ -81,7 +105,7 @@ FEATURE_EXTRACTION_REGISTRY: dict[str, FeatureExtractionProcessor] = _build_regi
 
 def get_processor(method: str) -> FeatureExtractionProcessor:
     if method not in FEATURE_EXTRACTION_REGISTRY:
-        raise ValueError(
+        raise UnknownProcessorError(
             f"Unknown feature extraction method: {method}. "
             f"Options: {list(FEATURE_EXTRACTION_REGISTRY.keys())}"
         )

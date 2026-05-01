@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from core.processors.errors import UnknownProcessorError
+
 
 class DimensionalityReductionProcessor(ABC):
     """Interface for dimensionality reduction algorithms."""
@@ -62,5 +64,7 @@ DR_REGISTRY: dict[str, DimensionalityReductionProcessor] = {
 
 def get_processor(method: str) -> DimensionalityReductionProcessor:
     if method not in DR_REGISTRY:
-        raise ValueError(f"Unknown DR method: {method}. Options: {list(DR_REGISTRY.keys())}")
+        raise UnknownProcessorError(
+            f"Unknown DR method: {method}. Options: {list(DR_REGISTRY.keys())}"
+        )
     return DR_REGISTRY[method]

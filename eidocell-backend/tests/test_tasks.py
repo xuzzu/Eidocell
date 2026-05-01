@@ -39,7 +39,7 @@ def session_for_tasks(client, tmp_path):
 def test_task_manager_submit_and_complete():
     tm = TaskManager()
 
-    def dummy_task(*, on_progress):
+    def dummy_task(*, on_progress, **_):
         on_progress(1, 2, "half")
         on_progress(2, 2, "done")
         return {"result": "ok"}
@@ -62,7 +62,7 @@ def test_task_manager_submit_and_complete():
 def test_task_manager_failure():
     tm = TaskManager()
 
-    def failing_task(*, on_progress):
+    def failing_task(*, on_progress, **_):
         raise ValueError("Something went wrong")
 
     task_id = tm.submit("fail test", failing_task)
@@ -80,7 +80,7 @@ def test_task_manager_failure():
 def test_task_manager_list():
     tm = TaskManager()
 
-    def noop(*, on_progress):
+    def noop(*, on_progress, **_):
         return None
 
     tm.submit("task1", noop)
@@ -94,7 +94,7 @@ def test_task_manager_list():
 def test_task_manager_cleanup():
     tm = TaskManager()
 
-    def noop(*, on_progress):
+    def noop(*, on_progress, **_):
         return None
 
     for i in range(5):
@@ -109,7 +109,7 @@ def test_task_manager_cleanup():
 def test_task_to_dict():
     tm = TaskManager()
 
-    def noop(*, on_progress):
+    def noop(*, on_progress, **_):
         on_progress(5, 10, "halfway")
         return {"x": 1}
 
@@ -208,7 +208,7 @@ def test_feature_extraction_async(client, session_for_tasks):
     })
 
     # Start async feature extraction
-    resp = client.post(f"/sessions/{sid}/features/extract-async", json={
+    resp = client.post(f"/sessions/{sid}/features/extract", json={
         "method": "morphological",
     })
     assert resp.status_code == 200
@@ -237,7 +237,7 @@ def test_task_progress_tracking(client, session_for_tasks):
         "method": "otsu_intensity",
     })
 
-    resp = client.post(f"/sessions/{sid}/features/extract-async", json={})
+    resp = client.post(f"/sessions/{sid}/features/extract", json={})
     task_id = resp.json()["task_id"]
 
     # Wait for completion and check final progress

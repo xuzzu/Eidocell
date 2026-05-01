@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pytest
 from pathlib import Path
@@ -15,6 +17,34 @@ def _create_test_image(path: Path, size=(100, 100)):
     Image.fromarray(img).save(path)
 
 
+def _wait_for_task(client, task_id: str, timeout_s: float = 10.0) -> dict:
+    """Poll /tasks/{id} until the task is no longer running."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        resp = client.get(f"/tasks/{task_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        if data["status"] in ("completed", "failed", "cancelled"):
+            return data
+        time.sleep(0.05)
+    raise AssertionError(f"task {task_id} did not finish in {timeout_s}s")
+
+
+def _run_extract(client, sid: str, body: dict | None = None) -> dict:
+    """Submit feature extraction and wait for it to finish; return the task dict."""
+    resp = client.post(f"/sessions/{sid}/features/extract", json=body or {})
+    if resp.status_code != 200:
+        return {"_http_status": resp.status_code, **resp.json()}
+    return _wait_for_task(client, resp.json()["task_id"])
+
+
+def _run_dim_reduction(client, sid: str, body: dict) -> dict:
+    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json=body)
+    if resp.status_code != 200:
+        return {"_http_status": resp.status_code, **resp.json()}
+    return _wait_for_task(client, resp.json()["task_id"])
+
+
 @pytest.fixture()
 def session_with_masks(client, tmp_path):
     """Create a session, run segmentation so masks/attributes exist."""
@@ -29,7 +59,6 @@ def session_with_masks(client, tmp_path):
     }).json()
     sid = session["id"]
 
-    # Run segmentation to generate mask attributes
     resp = client.post(f"/sessions/{sid}/segmentation/run", json={
         "method": "otsu_intensity",
         "params": {"distance_from_center": 80, "min_component_size": 10},
@@ -60,22 +89,20 @@ def test_list_extraction_methods(client, session_with_masks):
 
 def test_run_feature_extraction(client, session_with_masks):
     sid = session_with_masks["id"]
-    resp = client.post(f"/sessions/{sid}/features/extract", json={
-        "method": "morphological",
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 10
-    assert data["skipped"] == 0
-    assert data["total"] == 10
-    assert data["feature_dim"] == 15
+    task = _run_extract(client, sid, {"method": "morphological"})
+    assert task["status"] == "completed"
+    result = task["result"]
+    assert result["processed"] == 10
+    assert result["skipped"] == 0
+    assert result["total"] == 10
+    assert result["feature_dim"] == 15
 
 
 def test_run_feature_extraction_default_method(client, session_with_masks):
     sid = session_with_masks["id"]
-    resp = client.post(f"/sessions/{sid}/features/extract", json={})
-    assert resp.status_code == 200
-    assert resp.json()["processed"] == 10
+    task = _run_extract(client, sid, {})
+    assert task["status"] == "completed"
+    assert task["result"]["processed"] == 10
 
 
 def test_run_feature_extraction_unknown_method(client, session_with_masks):
@@ -99,39 +126,35 @@ def test_run_feature_extraction_no_masks(client, tmp_path):
     }).json()
     sid = session["id"]
 
-    resp = client.post(f"/sessions/{sid}/features/extract", json={})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] == 0
-    assert data["skipped"] == 3
+    task = _run_extract(client, sid, {})
+    assert task["status"] == "completed"
+    assert task["result"]["processed"] == 0
+    assert task["result"]["skipped"] == 3
 
 
 def test_features_file_created(client, session_with_masks):
     sid = session_with_masks["id"]
-    client.post(f"/sessions/{sid}/features/extract", json={})
+    _run_extract(client, sid, {})
 
-    # Verify .npy file was created
     session_folder = session_with_masks["session_folder"]
     features_path = Path(session_folder) / "features" / "session_features.npy"
     assert features_path.exists()
+    # Temp file should be cleaned up after success
+    assert not features_path.with_suffix(features_path.suffix + ".tmp").exists()
 
     features = np.load(features_path)
     assert features.ndim == 2
-    assert features.shape[1] == 15  # morphological feature dim
+    assert features.shape[1] == 15
 
 
 def test_clustering_works_after_extraction(client, session_with_masks):
     """End-to-end: segmentation → feature extraction → clustering."""
     sid = session_with_masks["id"]
 
-    # Extract features
-    resp = client.post(f"/sessions/{sid}/features/extract", json={})
-    assert resp.status_code == 200
+    task = _run_extract(client, sid, {})
+    assert task["status"] == "completed"
 
-    # Now clustering should work
-    resp = client.post(f"/sessions/{sid}/clusters/run", json={
-        "n_clusters": 2,
-    })
+    resp = client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["clusters"]) == 2
@@ -155,22 +178,17 @@ def test_list_dim_reduction_methods(client, session_with_masks):
 
 def test_run_pca_2d(client, session_with_masks):
     sid = session_with_masks["id"]
+    _run_extract(client, sid, {})
 
-    # Extract features first
-    client.post(f"/sessions/{sid}/features/extract", json={})
+    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    assert task["status"] == "completed"
+    result = task["result"]
+    assert result["method"] == "pca"
+    assert result["n_components"] == 2
+    assert result["n_samples"] == 10
+    assert len(result["embeddings"]) == 10
 
-    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
-        "method": "pca",
-        "n_components": 2,
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["method"] == "pca"
-    assert data["n_components"] == 2
-    assert data["n_samples"] == 10
-    assert len(data["embeddings"]) == 10
-
-    emb = data["embeddings"][0]
+    emb = result["embeddings"][0]
     assert "sample_id" in emb
     assert "filename" in emb
     assert "x" in emb
@@ -180,39 +198,33 @@ def test_run_pca_2d(client, session_with_masks):
 
 def test_run_pca_3d(client, session_with_masks):
     sid = session_with_masks["id"]
-    client.post(f"/sessions/{sid}/features/extract", json={})
+    _run_extract(client, sid, {})
 
-    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
-        "method": "pca",
-        "n_components": 3,
-    })
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["n_components"] == 3
-    emb = data["embeddings"][0]
-    assert "z" in emb
+    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 3})
+    assert task["status"] == "completed"
+    result = task["result"]
+    assert result["n_components"] == 3
+    assert "z" in result["embeddings"][0]
 
 
 def test_run_dim_reduction_no_features(client, session_with_masks):
     """Dim reduction without feature extraction should fail."""
     sid = session_with_masks["id"]
 
-    # Delete the features file if it exists
     session_folder = session_with_masks["session_folder"]
     features_path = Path(session_folder) / "features" / "session_features.npy"
     if features_path.exists():
         features_path.unlink()
 
-    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
-        "method": "pca",
-        "n_components": 2,
-    })
-    assert resp.status_code == 400
+    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    # The task fails because load_session_features raises HTTPException(400),
+    # which surfaces in the worker as a generic exception → status "failed".
+    assert task["status"] == "failed"
 
 
 def test_run_dim_reduction_unknown_method(client, session_with_masks):
     sid = session_with_masks["id"]
-    client.post(f"/sessions/{sid}/features/extract", json={})
+    _run_extract(client, sid, {})
 
     resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
         "method": "nonexistent",
@@ -224,15 +236,11 @@ def test_run_dim_reduction_unknown_method(client, session_with_masks):
 def test_embeddings_contain_class_info(client, session_with_masks):
     """Embeddings should include class_id for coloring in the UI."""
     sid = session_with_masks["id"]
-    client.post(f"/sessions/{sid}/features/extract", json={})
+    _run_extract(client, sid, {})
 
-    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
-        "method": "pca",
-        "n_components": 2,
-    })
-    assert resp.status_code == 200
-    emb = resp.json()["embeddings"][0]
-    assert "class_id" in emb
+    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    assert task["status"] == "completed"
+    assert "class_id" in task["result"]["embeddings"][0]
 
 
 # ── Real images test ──────────────────────────────────────────────────
@@ -246,7 +254,6 @@ def test_real_images_feature_pipeline(client, real_images_dir):
     }).json()
     sid = session["id"]
 
-    # Segment
     resp = client.post(f"/sessions/{sid}/segmentation/run", json={
         "method": "otsu_intensity",
         "params": {"distance_from_center": 50, "min_component_size": 15},
@@ -254,21 +261,14 @@ def test_real_images_feature_pipeline(client, real_images_dir):
     assert resp.status_code == 200
     assert resp.json()["processed"] > 0
 
-    # Extract features
-    resp = client.post(f"/sessions/{sid}/features/extract", json={})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["processed"] > 0
-    assert data["feature_dim"] == 15
+    task = _run_extract(client, sid, {})
+    assert task["status"] == "completed"
+    assert task["result"]["processed"] > 0
+    assert task["result"]["feature_dim"] == 15
 
-    # PCA 2D
-    resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
-        "method": "pca",
-        "n_components": 2,
-    })
-    assert resp.status_code == 200
-    embeddings = resp.json()["embeddings"]
+    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    assert task["status"] == "completed"
+    embeddings = task["result"]["embeddings"]
     assert len(embeddings) > 0
-    # Verify coordinates are not all identical
     xs = [e["x"] for e in embeddings]
     assert len(set(xs)) > 1

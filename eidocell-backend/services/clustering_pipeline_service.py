@@ -1,25 +1,37 @@
-"""Clustering pipeline service: orchestrates feature extraction → dim reduction → clustering.
+"""Clustering pipeline: feature extraction → dim reduction → clustering → save.
 
-Runs as a background task with progress reporting.
+Thin orchestrator over the shared pipeline helpers. Runs as a background task
+with progress reporting.
 """
 
+from services._pipeline_utils import features_cached_for
 import logging
 from pathlib import Path
 
-import cv2
 import numpy as np
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from fastapi import HTTPException
+from sqlalchemy.orm import Session as DbSession
 
+from core.processors.errors import UnknownProcessorError
 from core.processors.inference.clustering import get_processor as get_clustering_processor
-from core.processors.inference.dimensionality_reduction import get_processor as get_dr_processor
+from core.processors.inference.dimensionality_reduction import (
+    get_processor as get_dr_processor,
+)
 from core.processors.inference.feature_extraction import (
     get_processor as get_fe_processor,
-    MorphologicalFeatureExtraction,
 )
 from core.task_manager import task_manager
-from core.utils import random_color, npy_save, npy_load, get_active_samples
-from models.models import Session, Sample, Mask, Cluster, sample_clusters
+from core.utils import npy_load, random_color
+from models.models import Cluster, Sample
+from services._pipeline_utils import (
+    clean_zero_variance,
+    extract_features_into,
+    preload_morphological_masks,
+    snapshot_samples,
+    task_context,
+    thread_db_session,
+    validate_session_and_active_samples,
+)
 
 logger = logging.getLogger("eidocell.pipeline")
 
@@ -35,68 +47,33 @@ def run_clustering_pipeline(
     n_clusters: int | None = 10,
     clustering_params: dict | None = None,
 ) -> str:
-    """Start the full clustering pipeline as a background task. Returns task_id."""
-    from fastapi import HTTPException
-
-    session = db.query(Session).filter(Session.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    samples = get_active_samples(db, session_id)
-    if not samples:
-        raise HTTPException(status_code=400, detail="No active samples")
+    """Submit the full clustering pipeline as a background task. Returns task_id."""
+    session, samples = validate_session_and_active_samples(db, session_id)
     if n_clusters is not None and len(samples) < n_clusters:
         raise HTTPException(
             status_code=400,
             detail=f"Need at least {n_clusters} active samples, got {len(samples)}",
         )
 
-    # Validate processors exist
     try:
-        get_fe_processor(feature_method)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if dim_reduction_method:
-        try:
+        fe_processor = get_fe_processor(feature_method)
+        if dim_reduction_method:
             get_dr_processor(dim_reduction_method)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    try:
         get_clustering_processor(clustering_method)
-    except ValueError as e:
+    except UnknownProcessorError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Snapshot data for background thread
-    sample_data = [
-        {"id": s.id, "path": s.path, "storage_index": s.storage_index}
-        for s in samples
-    ]
-    session_folder = session.session_folder
+    sample_data = snapshot_samples(samples)
+    masks = preload_morphological_masks(db, sample_data, fe_processor)
 
-    # Pre-load mask attributes for morphological
-    masks = {}
-    fe_processor = get_fe_processor(feature_method)
-    if isinstance(fe_processor, MorphologicalFeatureExtraction):
-        sample_ids = [s["id"] for s in sample_data]
-        masks = {
-            m.sample_id: m.attributes
-            for m in db.query(Mask).filter(Mask.sample_id.in_(sample_ids)).all()
-            if m.attributes
-        }
-
-    # Get DB URL for background thread
-    db_url = str(db.get_bind().url)
-
-    task_id = task_manager.submit(
+    return task_manager.submit(
         name="Clustering pipeline",
         func=_background_pipeline,
         session_id=session_id,
         sample_data=sample_data,
-        session_folder=session_folder,
+        session_folder=session.session_folder,
         masks=masks,
-        db_url=db_url,
+        db_url=str(db.get_bind().url),
         feature_method=feature_method,
         dim_reduction_method=dim_reduction_method,
         dim_reduction_params=dim_reduction_params or {},
@@ -104,7 +81,6 @@ def run_clustering_pipeline(
         n_clusters=n_clusters,
         clustering_params=clustering_params or {},
     )
-    return task_id
 
 
 def _background_pipeline(
@@ -124,167 +100,125 @@ def _background_pipeline(
     is_cancelled=None,
 ):
     """Run the full pipeline in a background thread."""
-    total_steps = len(sample_data) + 3  # feature extraction per-sample + dr + clustering + embed
-    current = 0
-
-    # ── Step 1: Feature extraction ──────────────────────────────────────
-    on_progress(0, total_steps, "Starting feature extraction...")
-
     fe_processor = get_fe_processor(feature_method)
     feature_dim = fe_processor.feature_dim()
-    max_index = max(s["storage_index"] for s in sample_data) + 1
+    features_path = Path(session_folder) / "features" / "session_features.npy"
 
-    features_dir = Path(session_folder) / "features"
-    features_dir.mkdir(exist_ok=True)
-    features_path = features_dir / "session_features.npy"
+    # 1: Feature extraction (cached if already valid)
+    if not features_cached_for(features_path, sample_data, feature_dim):
+        extract_features_into(
+            sample_data=sample_data,
+            processor=fe_processor,
+            masks=masks,
+            features_path=features_path,
+            feature_dim=feature_dim,
+            on_progress=on_progress,
+            is_cancelled=is_cancelled,
+        )
 
-    # Check if features already exist with correct dimension
-    need_extraction = True
-    if features_path.exists():
-        existing = npy_load(features_path)
-        if existing.shape[0] >= max_index and existing.shape[1] == feature_dim:
-            # Check that the samples we need have non-zero features
-            indices = [s["storage_index"] for s in sample_data]
-            sample_features = existing[indices]
-            if np.any(np.abs(sample_features).sum(axis=1) > 0):
-                need_extraction = False
-                all_features = existing
-                on_progress(len(sample_data), total_steps, "Features already extracted, reusing...")
-
-    if need_extraction:
-        all_features = np.zeros((max_index, feature_dim), dtype=np.float32)
-
-        for i, sd in enumerate(sample_data):
-            if is_cancelled and is_cancelled():
-                pass # on_progress will raise TaskCancelledException shortly
-
-            if isinstance(fe_processor, MorphologicalFeatureExtraction):
-                attrs = masks.get(sd["id"])
-                if attrs:
-                    all_features[sd["storage_index"]] = fe_processor.extract_from_attributes(attrs)
-            else:
-                image = cv2.imread(sd["path"], cv2.IMREAD_UNCHANGED)
-                if image is not None:
-                    try:
-                        all_features[sd["storage_index"]] = fe_processor.extract(image)
-                    except Exception:
-                        pass
-
-            current = i + 1
-            on_progress(current, total_steps, f"Extracting features... {current}/{len(sample_data)}")
-
-        npy_save(features_path, all_features)
-    else:
-        current = len(sample_data)
-
-    # Get features for active samples only
+    all_features = npy_load(features_path)
     indices = [s["storage_index"] for s in sample_data]
-    active_features = all_features[indices]  # (n_samples, feature_dim)
+    active_features = all_features[indices]
 
-    # ── Step 2: Dimensionality reduction for clustering ─────────────────
-    current += 1
-    on_progress(current, total_steps, "Reducing dimensionality...")
-    if is_cancelled and is_cancelled(): pass
+    # 2-4: DR → cluster → 2D projection
+    with task_context(on_progress, is_cancelled, total=len(sample_data) + 3) as ctx:
+        ctx.current = len(sample_data)
+
+        ctx.stage("Reducing dimensionality...", advance=1)
+        if dim_reduction_method:
+            dr_processor = get_dr_processor(dim_reduction_method)
+            features_for_clustering = dr_processor.fit_transform(
+                clean_zero_variance(active_features), **dim_reduction_params
+            )
+        else:
+            features_for_clustering = active_features
+
+        ctx.stage(f"Clustering ({clustering_method})...", advance=1)
+        cl_processor = get_clustering_processor(clustering_method)
+        labels = cl_processor.fit_predict(
+            features_for_clustering, n_clusters, **clustering_params
+        )
+        actual_n_clusters = int(labels.max()) + 1
+
+        # Visualization
+        ctx.stage("Generating 2D projection...", advance=1)
+        embeddings_2d = _project_to_2d(features_for_clustering)
+
+    # 5: Save clusters
+    on_progress(len(sample_data) + 3, len(sample_data) + 3, "Saving clusters...")
+    return _save_clusters(
+        db_url=db_url,
+        session_id=session_id,
+        sample_data=sample_data,
+        labels=labels,
+        embeddings_2d=embeddings_2d,
+        n_clusters=actual_n_clusters,
+    )
 
 
-    if dim_reduction_method:
-        dr_processor = get_dr_processor(dim_reduction_method)
-        # Clean zero-variance features
-        stds = np.std(active_features, axis=0)
-        valid_cols = stds > 0
-        features_clean = active_features[:, valid_cols] if np.any(valid_cols) else active_features
-        reduced_features = dr_processor.fit_transform(features_clean, **dim_reduction_params)
-    else:
-        reduced_features = active_features
+def _project_to_2d(features: np.ndarray) -> np.ndarray:
+    if features.shape[1] == 2:
+        return features
+    if features.shape[1] == 1:
+        return np.column_stack([features, np.zeros(len(features))])
+    from sklearn.decomposition import PCA
 
-    # ── Step 3: Clustering ──────────────────────────────────────────────
-    current += 1
-    on_progress(current, total_steps, "Clustering...")
-    if is_cancelled and is_cancelled(): pass
+    n_comp = min(2, features.shape[0], features.shape[1])
+    return PCA(n_components=n_comp).fit_transform(features)
 
 
-    cl_processor = get_clustering_processor(clustering_method)
-    labels = cl_processor.fit_predict(reduced_features, n_clusters, **clustering_params)
-    actual_n_clusters = int(labels.max()) + 1
-
-    # ── Step 4: Generate 2D embeddings for visualization ────────────────
-    current += 1
-    on_progress(current, total_steps, "Generating 2D projection...")
-    if is_cancelled and is_cancelled(): pass
-
-
-    from sklearn.decomposition import PCA as PCA2D
-    if reduced_features.shape[1] > 2:
-        n_comp = min(2, reduced_features.shape[0], reduced_features.shape[1])
-        pca_2d = PCA2D(n_components=n_comp)
-        embeddings_2d = pca_2d.fit_transform(reduced_features)
-    elif reduced_features.shape[1] == 2:
-        embeddings_2d = reduced_features
-    else:
-        # 1D features, pad with zeros
-        embeddings_2d = np.column_stack([reduced_features, np.zeros(len(reduced_features))])
-
-    # ── Step 5: Save clusters to DB ─────────────────────────────────────
-    on_progress(current, total_steps, "Saving clusters...")
-
-    engine = create_engine(db_url)
-    SessionLocal = sessionmaker(bind=engine)
-    db = SessionLocal()
-
-    try:
+def _save_clusters(
+    *,
+    db_url: str,
+    session_id: str,
+    sample_data: list[dict],
+    labels: np.ndarray,
+    embeddings_2d: np.ndarray,
+    n_clusters: int,
+) -> dict:
+    with thread_db_session(db_url) as db:
         # Clear existing clusters
-        existing_clusters = db.query(Cluster).filter(Cluster.session_id == session_id).all()
-        for c in existing_clusters:
+        for c in db.query(Cluster).filter(Cluster.session_id == session_id).all():
             db.delete(c)
         db.commit()
 
-        # Create new clusters
-        cluster_colors = {}
         clusters_out = []
-        for k in range(actual_n_clusters):
-            color = random_color()
-            cluster = Cluster(session_id=session_id, color=color)
+        cluster_meta: dict[int, dict] = {}
+        for k in range(n_clusters):
+            cluster = Cluster(session_id=session_id, color=random_color())
             db.add(cluster)
             db.flush()
 
-            cluster_sample_ids = [
+            sample_ids_for_cluster = [
                 sample_data[i]["id"] for i, lbl in enumerate(labels) if lbl == k
             ]
-            # Add samples to cluster via the junction table
-            for sid in cluster_sample_ids:
+            for sid in sample_ids_for_cluster:
                 sample = db.query(Sample).filter(Sample.id == sid).first()
                 if sample:
                     sample.clusters.append(cluster)
 
-            cluster_colors[k] = {"id": cluster.id, "color": color}
+            cluster_meta[k] = {"id": cluster.id, "color": cluster.color}
             clusters_out.append({
                 "id": cluster.id,
-                "color": color,
-                "sample_count": len(cluster_sample_ids),
+                "color": cluster.color,
+                "sample_count": len(sample_ids_for_cluster),
             })
 
         db.commit()
 
-        # Build embeddings response
         embeddings = []
         for i, sd in enumerate(sample_data):
-            label = int(labels[i])
-            ci = cluster_colors.get(label, {})
+            meta = cluster_meta.get(int(labels[i]), {})
             embeddings.append({
                 "sample_id": sd["id"],
                 "x": float(embeddings_2d[i, 0]),
                 "y": float(embeddings_2d[i, 1]),
-                "cluster_id": ci.get("id"),
-                "cluster_color": ci.get("color"),
+                "cluster_id": meta.get("id"),
+                "cluster_color": meta.get("color"),
             })
-
-        total_clustered = sum(c["sample_count"] for c in clusters_out)
 
         return {
             "clusters": clusters_out,
-            "total_samples_clustered": total_clustered,
+            "total_samples_clustered": sum(c["sample_count"] for c in clusters_out),
             "embeddings": embeddings,
         }
-    finally:
-        db.close()
-        engine.dispose()

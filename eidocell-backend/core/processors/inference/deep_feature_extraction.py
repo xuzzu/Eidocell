@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torchvision import transforms, models
 
+from core.processors.errors import ProcessorInputError, ProcessorRuntimeError
 from core.processors.inference.feature_extraction import FeatureExtractionProcessor
 
 # ImageNet normalization
@@ -40,30 +41,47 @@ class MobileNetV3Extraction(FeatureExtractionProcessor):
             self._model.eval()
         return self._model
 
+    def validate_input(self, image: np.ndarray) -> None:
+        super().validate_input(image)
+        if image.ndim not in (2, 3):
+            raise ProcessorInputError(
+                f"expected 2-D or 3-D image, got shape {image.shape}"
+            )
+        if image.ndim == 3 and image.shape[2] not in (1, 3, 4):
+            raise ProcessorInputError(
+                f"expected 1/3/4-channel image, got shape {image.shape}"
+            )
+
     def _preprocess(self, image: np.ndarray) -> torch.Tensor:
         """Convert BGR/grayscale image to normalized RGB tensor."""
-        if len(image.shape) == 2:
+        if image.ndim == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 1:
+            image = cv2.cvtColor(image.squeeze(-1), cv2.COLOR_GRAY2RGB)
         elif image.shape[2] == 4:
             image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
-        elif image.shape[2] == 3:
+        else:  # 3 channels
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Ensure uint8
         if image.dtype != np.uint8:
             if image.dtype in (np.float32, np.float64):
                 image = (image * 255).clip(0, 255).astype(np.uint8)
             elif image.dtype == np.uint16:
                 image = (image / 256).astype(np.uint8)
+            else:
+                raise ProcessorInputError(f"unsupported dtype {image.dtype}")
 
-        tensor = self._transform(image)
-        return tensor.unsqueeze(0)  # (1, 3, 224, 224)
+        return self._transform(image).unsqueeze(0)  # (1, 3, 224, 224)
 
     def extract(self, image: np.ndarray) -> np.ndarray:
+        self.validate_input(image)
         model = self._load_model()
         tensor = self._preprocess(image)
-        with torch.no_grad():
-            features = model(tensor)  # (1, 576)
+        try:
+            with torch.no_grad():
+                features = model(tensor)  # (1, 576)
+        except Exception as e:
+            raise ProcessorRuntimeError(f"MobileNetV3 forward pass failed: {e}") from e
         return features.squeeze(0).cpu().numpy().astype(np.float32)
 
     def feature_dim(self) -> int:
