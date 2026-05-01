@@ -22,14 +22,18 @@ function formatDate(iso: string) {
     @click="emit('select', session.id)"
   >
     <div class="p-5 flex-1 flex flex-col">
-      <div class="flex items-start justify-between mb-4">
-        <div class="flex items-center gap-4">
+      <div class="flex items-start justify-between mb-4 gap-4">
+        <div class="flex items-center gap-4 min-w-0 flex-1">
           <div class="w-10 h-10 rounded-[2px] border border-neutral/20 bg-base-200 flex items-center justify-center text-neutral group-hover:bg-neutral group-hover:text-base-100 transition-colors shrink-0">
             <Folder class="w-5 h-5 stroke-[1.5px]" />
           </div>
-          <div class="min-w-0">
+          <div class="min-w-0 flex-1">
             <h3 class="font-bold text-sm tracking-wider uppercase truncate">{{ session.name }}</h3>
-            <p class="text-[10px] font-mono text-neutral/50 truncate mt-0.5" :title="session.images_directory">{{ session.images_directory }}</p>
+            <div class="path-container mt-0.5">
+              <p class="path-text text-[10px] font-mono text-neutral/50" :title="session.images_directory">
+                {{ session.images_directory }}
+              </p>
+            </div>
           </div>
         </div>
         <button
@@ -49,3 +53,31 @@ function formatDate(iso: string) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.path-container {
+  container-type: inline-size;
+  overflow: hidden;
+  white-space: nowrap;
+  /* Add a subtle fade on the right side by default to indicate more text */
+  mask-image: linear-gradient(to right, black 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 95%, transparent 100%);
+}
+
+.group:hover .path-container {
+  /* Remove mask on hover so the end of the path isn't faded when it reaches the edge */
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
+.path-text {
+  display: inline-block;
+  min-width: 100%;
+  transition: transform 2.5s ease-in-out;
+  transition-delay: 0.2s;
+}
+
+.group:hover .path-text {
+  transform: translateX(min(0px, calc(100cqw - 100%)));
+}
+</style>
