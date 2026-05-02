@@ -306,6 +306,15 @@ def task_context(
 ) -> Iterator[_TaskContext]:
     yield _TaskContext(on_progress, is_cancelled, total=total)
 
+def project_to_2d(features: np.ndarray) -> np.ndarray:
+    if features.shape[1] == 2:
+        return features
+    if features.shape[1] == 1:
+        return np.column_stack([features, np.zeros(len(features))])
+    from sklearn.decomposition import PCA
+
+    n_comp = min(2, features.shape[0], features.shape[1])
+    return PCA(n_components=n_comp).fit_transform(features)
 
 __all__ = [
     "validate_session_and_active_samples",
@@ -317,4 +326,5 @@ __all__ = [
     "thread_db_session",
     "task_context",
     "DEFAULT_FLUSH_EVERY",
+    "project_to_2d",
 ]

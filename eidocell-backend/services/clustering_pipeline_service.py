@@ -4,6 +4,7 @@ Thin orchestrator over the shared pipeline helpers. Runs as a background task
 with progress reporting.
 """
 
+from services._pipeline_utils import project_to_2d
 from services._pipeline_utils import features_cached_for
 import logging
 from pathlib import Path
@@ -104,7 +105,7 @@ def _background_pipeline(
     feature_dim = fe_processor.feature_dim()
     features_path = Path(session_folder) / "features" / "session_features.npy"
 
-    # 1: Feature extraction (cached if already valid)
+    # 1: Feature extraction (cache if they already exist)
     if not features_cached_for(features_path, sample_data, feature_dim):
         extract_features_into(
             sample_data=sample_data,
@@ -142,7 +143,7 @@ def _background_pipeline(
 
         # Visualization
         ctx.stage("Generating 2D projection...", advance=1)
-        embeddings_2d = _project_to_2d(features_for_clustering)
+        embeddings_2d = project_to_2d(features_for_clustering)
 
     # 5: Save clusters
     on_progress(len(sample_data) + 3, len(sample_data) + 3, "Saving clusters...")
@@ -154,17 +155,6 @@ def _background_pipeline(
         embeddings_2d=embeddings_2d,
         n_clusters=actual_n_clusters,
     )
-
-
-def _project_to_2d(features: np.ndarray) -> np.ndarray:
-    if features.shape[1] == 2:
-        return features
-    if features.shape[1] == 1:
-        return np.column_stack([features, np.zeros(len(features))])
-    from sklearn.decomposition import PCA
-
-    n_comp = min(2, features.shape[0], features.shape[1])
-    return PCA(n_components=n_comp).fit_transform(features)
 
 
 def _save_clusters(
