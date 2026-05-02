@@ -1,13 +1,12 @@
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import func, case
-from sqlalchemy.orm import Session as DbSession, joinedload
+from sqlalchemy import func
+from sqlalchemy.orm import Session as DbSession
 
 from models.models import Sample, SampleClass, Mask
 from core.processors.image_utils import generate_thumbnail
 from schemas.workspace.gallery import (
-    SampleOut,
     SampleListParams,
     FilterCondition,
     ClassCreate,

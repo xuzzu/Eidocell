@@ -34,7 +34,6 @@ def file_lock(path: Path, *, shared: bool = False):
 
 def npy_save(path: Path, array: np.ndarray, *, allow_pickle: bool = False) -> None:
     """Atomically save a numpy array with exclusive file locking."""
-    import os
     with file_lock(path, shared=False):
         # Use a temp dir to handle np.save's auto .npy extension behaviour
         tmp_dir = tempfile.mkdtemp(dir=path.parent)

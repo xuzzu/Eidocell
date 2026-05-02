@@ -5,7 +5,6 @@ from fastapi.responses import StreamingResponse
 from starlette.requests import Request
 
 from core.notifications import notification_manager
-from core.task_manager import task_manager
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 

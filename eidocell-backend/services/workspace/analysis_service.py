@@ -4,13 +4,12 @@ import logging
 import math
 import random
 import struct
-from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from models.models import Session, Sample, SampleClass, Mask, Plot, Gate, Cluster, sample_clusters
+from models.models import Sample, SampleClass, Mask, Plot, Gate, sample_clusters
 from schemas.workspace.analysis import _validate_gate_definition
 
 logger = logging.getLogger("eidocell.analysis")

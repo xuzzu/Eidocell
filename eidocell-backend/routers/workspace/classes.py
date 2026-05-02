@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from db.session import get_db
 from schemas.workspace.classes import ClassSummary, ClassStatistics
-from schemas.workspace.gallery import SampleOut, SamplePage
+from schemas.workspace.gallery import SamplePage
 from services.workspace import classes_service
 
 router = APIRouter(prefix="/sessions/{session_id}/classes", tags=["classes"])

@@ -1,7 +1,6 @@
 """Settings service: app-level settings persisted to JSON."""
 
 import json
-from pathlib import Path
 
 from core.config import EIDOCELL_HOME
 from schemas.settings import AppSettings

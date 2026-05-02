@@ -1,14 +1,12 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session as DbSession
 
 from db.session import get_db
-from models.models import Session
 from schemas.workspace.gallery import (
     SampleOut,
     SamplePage,
     SampleListParams,
-    FilterCondition,
     ClassCreate,
     ClassUpdate,
     ClassOut,

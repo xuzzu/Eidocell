@@ -69,7 +69,7 @@ class EVoCClustering(ClusteringProcessor):
         # EVoC may produce -1 for noise points — reassign them to nearest cluster
         unique_labels = set(labels)
         if -1 in unique_labels and len(unique_labels) > 1:
-            from sklearn.neighbors import NearestCentroid, KNeighborsClassifier
+            from sklearn.neighbors import KNeighborsClassifier
 
             mask = labels != -1
             if mask.sum() > 0:

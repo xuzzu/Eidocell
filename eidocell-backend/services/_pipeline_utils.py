@@ -28,8 +28,6 @@ from sqlalchemy.orm import Session as DbSession, sessionmaker
 from core.processors.errors import (
     ProcessorError,
     ProcessorInputError,
-    ProcessorRuntimeError,
-    UnknownProcessorError,
 )
 from core.processors.inference.feature_extraction import (
     FeatureExtractionProcessor,
