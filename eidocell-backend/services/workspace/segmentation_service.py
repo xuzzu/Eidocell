@@ -225,6 +225,59 @@ def run_segmentation_preview(
     return {"processed": processed, "failed": failed, "total": len(sample_data)}
 
 
+def stream_preview_overlays(
+    db: DbSession,
+    session_id: str,
+    method: str,
+    params: dict,
+    sample_ids: list[str],
+):
+    """Yield (sample_id, overlay_png_bytes, attributes) per sample.
+
+    Used by the WebSocket preview endpoint. Does NOT write masks/overlays
+    to disk or DB — preview is throwaway.
+    """
+    processor = get_processor(method)
+
+    session = db.query(Session).filter(Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    samples = db.query(Sample).filter(
+        Sample.id.in_(sample_ids),
+        Sample.session_id == session_id,
+    ).all()
+    # Preserve client-requested order
+    samples_by_id = {s.id: s for s in samples}
+    ordered = [samples_by_id[sid] for sid in sample_ids if sid in samples_by_id]
+
+    scale_factor = session.scale_factor
+
+    for s in ordered:
+        src_path = Path(s.path)
+        if not src_path.is_file():
+            yield s.id, None, None
+            continue
+        try:
+            image = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
+            if image is None:
+                yield s.id, None, None
+                continue
+
+            mask_data = processor.segment(image, **params)
+            attrs = compute_mask_attributes(image, mask_data, scale_factor)
+            overlay = generate_mask_overlay(image, mask_data)
+            # Encode RGB → BGR for cv2.imencode, then to PNG bytes
+            ok, buf = cv2.imencode(".png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+            if not ok:
+                yield s.id, None, None
+                continue
+            yield s.id, bytes(buf), attrs
+        except Exception:
+            logger.exception("preview failed for sample %s", s.id)
+            yield s.id, None, None
+
+
 def run_segmentation_async(
     db: DbSession, session_id: str, method: str, params: dict
 ) -> str:

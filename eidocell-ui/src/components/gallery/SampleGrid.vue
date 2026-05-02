@@ -62,7 +62,7 @@ function isSelected(id: string) {
 
 function getImageSrc(sample: SampleOut) {
   if (props.maskView && sample.has_mask) {
-    return maskOverlayUrl(sid.value, sample.id)
+    return maskOverlayUrl(sid.value, sample.id, gallery.maskVersion)
   }
   return sampleThumbnailUrl(sid.value, sample.id)
 }

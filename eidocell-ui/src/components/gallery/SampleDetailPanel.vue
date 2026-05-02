@@ -41,7 +41,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 const imageSource = computed(() => {
   if (!sample.value) return ''
   if (showOverlay.value && sample.value.has_mask) {
-    return maskOverlayUrl(sid.value, sample.value.id)
+    return maskOverlayUrl(sid.value, sample.value.id, gallery.maskVersion)
   }
   return sampleImageUrl(sid.value, sample.value.id)
 })

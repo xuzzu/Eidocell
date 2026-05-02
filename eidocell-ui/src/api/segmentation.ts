@@ -13,8 +13,7 @@ export const runSegmentationAsync = (sid: string, data: RunSegmentationRequest) 
 export const getMaskAttributes = (sid: string, sampleId: string) =>
   apiGet<Record<string, number>>(`/sessions/${sid}/samples/${sampleId}/mask/attributes`)
 
-export const runSegmentationPreview = (sid: string, data: { method: string; params: Record<string, number>; sample_ids: string[] }) =>
-  apiPost<SegmentationResult>(`/sessions/${sid}/segmentation/preview`, data)
-
-export const maskOverlayUrl = (sid: string, sampleId: string) =>
-  imageUrl(`/sessions/${sid}/samples/${sampleId}/mask/overlay`)
+export const maskOverlayUrl = (sid: string, sampleId: string, version?: number) => {
+  const base = imageUrl(`/sessions/${sid}/samples/${sampleId}/mask/overlay`)
+  return version ? `${base}?v=${version}` : base
+}

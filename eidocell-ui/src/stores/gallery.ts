@@ -19,6 +19,10 @@ export const useGalleryStore = defineStore('gallery', () => {
   const classes = ref<ClassOut[]>([])
   const loading = ref(false)
   const sortableAttributes = ref<string[]>([])
+  // Bumped after segmentation completes — used as a query-string version on
+  // mask-overlay URLs to defeat the browser's in-memory image cache when the
+  // file at a stable URL has been overwritten.
+  const maskVersion = ref(0)
 
   const sid = computed(() => sessionStore.currentSessionId!)
 
@@ -34,6 +38,11 @@ export const useGalleryStore = defineStore('gallery', () => {
     classes.value = []
     loading.value = false
     sortableAttributes.value = []
+    maskVersion.value = 0
+  }
+
+  function bumpMaskVersion() {
+    maskVersion.value++
   }
 
   async function fetchSamples() {
@@ -139,11 +148,11 @@ export const useGalleryStore = defineStore('gallery', () => {
   return {
     samples, total, offset, limit, sortBy, sortOrder, filters,
     selectedIds, detailSample, classes, loading,
-    sortableAttributes,
+    sortableAttributes, maskVersion,
     $reset,
     fetchSamples, loadNextPage, fetchClasses, fetchSortableAttributes,
     createClass, deleteClass,
     assignSelectedToClass, toggleSelection, setSelection, clearSelection,
-    setSort, setFilters,
+    setSort, setFilters, bumpMaskVersion,
   }
 })

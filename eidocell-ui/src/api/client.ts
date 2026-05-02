@@ -50,3 +50,9 @@ export async function apiDelete(path: string): Promise<void> {
 export function imageUrl(path: string): string {
   return `${BASE_URL}${path}`
 }
+
+export function wsUrl(path: string): string {
+  // Convert http(s):// → ws(s):// while preserving host and port
+  const base = BASE_URL.replace(/^http/, 'ws')
+  return `${base}${path}`
+}

@@ -51,7 +51,11 @@ def generate_mask_overlay(
     blended = cv2.addWeighted(display, 1 - opacity, overlay, opacity, 0)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(blended, contours, -1, contour_color, 2)
+    # Scale outline thickness by image size so it stays visually consistent
+    # across resolutions (1 px per ~256 px of the shorter side).
+    h, w = display.shape[:2]
+    thickness = max(1, round(min(h, w) / 256))
+    cv2.drawContours(blended, contours, -1, contour_color, thickness, lineType=cv2.LINE_AA)
 
     return blended
 
