@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { Play, Box, BarChart3, RotateCcw } from 'lucide-vue-next'
+import { nextTick, onMounted, ref, watch } from 'vue'
+import { Play, Box, BarChart3, RotateCcw, ArrowUpDown } from 'lucide-vue-next'
 import { useClustersStore } from '@/stores/clusters'
 import { useGalleryStore } from '@/stores/gallery'
 import { getClusterSamples } from '@/api/clusters'
@@ -14,12 +14,21 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import TaskProgressBar from '@/components/common/TaskProgressBar.vue'
 import SamplePreviewDialog from '@/components/common/SamplePreviewDialog.vue'
 import GatingActiveBanner from '@/components/common/GatingActiveBanner.vue'
+import type { ClusterSortMode } from '@/types'
 
 const clusters = useClustersStore()
 const gallery = useGalleryStore()
 const sessionStore = useSessionStore()
 const previewDialog = ref<InstanceType<typeof SamplePreviewDialog>>()
 const gridContainer = ref<HTMLElement>()
+
+const SORT_OPTIONS: { value: ClusterSortMode; label: string }[] = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'count_desc', label: 'Most samples' },
+  { value: 'count_asc', label: 'Fewest samples' },
+  { value: 'labeled_desc', label: '% Labeled' },
+  { value: 'quality_desc', label: 'Tightest (quality)' },
+]
 
 const { selectionRect } = useDragSelect(
   gridContainer,
@@ -84,6 +93,22 @@ function onContextSplit(n: number) {
   const id = Array.from(clusters.selectedClusterIds)[0]
   if (id) clusters.splitCluster(id, n)
 }
+
+// Auto-scroll to the first newly-added cluster after merge/split.
+// Uses sortedClusters so the lookup respects the active sort.
+watch(
+  () => Array.from(clusters.recentlyAddedIds),
+  (ids) => {
+    if (!ids.length) return
+    const ordered = clusters.sortedClusters.map(c => c.id)
+    const target = ordered.find(id => ids.includes(id))
+    if (!target) return
+    nextTick(() => {
+      const el = gridContainer.value?.querySelector(`[data-cluster-id="${target}"]`)
+      ;(el as HTMLElement | null)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  },
+)
 </script>
 
 <template>
@@ -167,24 +192,51 @@ function onContextSplit(n: number) {
           description="CONFIGURE THE PIPELINE AND CLICK RUN TO GROUP SIMILAR SAMPLES"
         />
 
-        <div v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-max">
-          <ClusterCard
-            v-for="cluster in clusters.clusters"
-            :key="cluster.id"
-            :cluster="cluster"
-            :is-single-selected="clusters.selectedClusterIds.size === 1 && clusters.selectedClusterIds.has(cluster.id)"
-            :is-drag-target="dragTargetId === cluster.id"
-            :is-dragging="draggingId === cluster.id"
-            @preview="onPreview(cluster.id)"
-            @split="(id, n) => clusters.splitCluster(id, n)"
-            @contextmenu="onContextmenu"
-            @dragstart="onDragstart"
-            @dragend="onDragend"
-            @dragenter="onDragenter"
-            @dragleave="onDragleave"
-            @drop="onDrop"
-          />
-        </div>
+        <template v-else>
+          <!-- Toolbar: sort -->
+          <div class="flex items-center gap-3 mb-4">
+            <label class="flex items-center gap-2 text-[10px] font-bold tracking-widest uppercase text-neutral/60">
+              <ArrowUpDown class="w-3 h-3 stroke-[2px]" />
+              Sort
+            </label>
+            <select
+              v-model="clusters.sortMode"
+              class="select select-xs select-bordered rounded-[2px] text-[11px] uppercase tracking-wider font-mono"
+            >
+              <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+            <span class="text-[10px] text-neutral/40 font-mono ml-auto">
+              {{ clusters.clusters.length }} clusters
+            </span>
+          </div>
+
+          <!-- TransitionGroup wraps the grid for FLIP reflow on merge/split.
+               Note: TransitionGroup measures bounding rects — incompatible with
+               virtualization should this grid ever be virtualized. -->
+          <TransitionGroup
+            name="cluster"
+            tag="div"
+            class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 auto-rows-max"
+          >
+            <ClusterCard
+              v-for="cluster in clusters.sortedClusters"
+              :key="cluster.id"
+              :cluster="cluster"
+              :is-single-selected="clusters.selectedClusterIds.size === 1 && clusters.selectedClusterIds.has(cluster.id)"
+              :is-drag-target="dragTargetId === cluster.id"
+              :is-dragging="draggingId === cluster.id"
+              :is-recently-added="clusters.recentlyAddedIds.has(cluster.id)"
+              @preview="onPreview(cluster.id)"
+              @split="(id, n) => clusters.splitCluster(id, n)"
+              @contextmenu="onContextmenu"
+              @dragstart="onDragstart"
+              @dragend="onDragend"
+              @dragenter="onDragenter"
+              @dragleave="onDragleave"
+              @drop="onDrop"
+            />
+          </TransitionGroup>
+        </template>
       </div>
     </div>
 
@@ -205,3 +257,21 @@ function onContextSplit(n: number) {
     <SamplePreviewDialog ref="previewDialog" />
   </div>
 </template>
+
+<style scoped>
+.cluster-enter-active {
+  transition: opacity 250ms ease-out, transform 250ms ease-out;
+}
+.cluster-leave-active {
+  transition: opacity 200ms ease-in, transform 200ms ease-in;
+  position: absolute;
+}
+.cluster-enter-from,
+.cluster-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+.cluster-move {
+  transition: transform 300ms ease;
+}
+</style>

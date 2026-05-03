@@ -1,8 +1,20 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
 class RunClusteringRequest(BaseModel):
     n_clusters: int = Field(10, ge=2, le=100)
+
+
+class ClusteringScope(BaseModel):
+    """Restrict clustering to a subset of samples.
+
+    v1: a scoped run always replaces the session's existing clusters.
+    """
+    mode: Literal["all", "unlabeled", "class", "samples"] = "all"
+    class_id: str | None = None
+    sample_ids: list[str] | None = None
 
 
 class RunClusteringPipelineRequest(BaseModel):
@@ -18,6 +30,9 @@ class RunClusteringPipelineRequest(BaseModel):
     clustering_method: str = "kmeans"
     n_clusters: int | None = Field(10, ge=2, le=100)
     clustering_params: dict = {}
+
+    # Scope (defaults to all active samples)
+    scope: ClusteringScope = Field(default_factory=ClusteringScope)
 
 
 class SplitClusterRequest(BaseModel):
@@ -37,6 +52,9 @@ class ClusterOut(BaseModel):
     id: str
     color: str
     sample_count: int
+    labeled_count: int = 0
+    quality_score: float | None = None
+    feature_method: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -58,3 +76,13 @@ class ClusteringPipelineResult(BaseModel):
     clusters: list[ClusterOut]
     total_samples_clustered: int
     embeddings: list[EmbeddingPoint]
+
+
+class SplitClusterResult(BaseModel):
+    new_clusters: list[ClusterOut]
+    deleted_cluster_id: str
+
+
+class MergeClustersResult(BaseModel):
+    new_cluster: ClusterOut
+    deleted_cluster_ids: list[str]

@@ -23,15 +23,16 @@ from core.processors.inference.feature_extraction import (
 )
 from core.task_manager import task_manager
 from core.utils import npy_load, random_color
-from models.models import Cluster, Sample
+from models.models import Cluster, Sample, SampleClass
 from services._pipeline_utils import (
     clean_zero_variance,
+    compute_quality,
     extract_features_into,
     preload_morphological_masks,
+    resolve_scoped_samples,
     snapshot_samples,
     task_context,
     thread_db_session,
-    validate_session_and_active_samples,
 )
 
 logger = logging.getLogger("eidocell.pipeline")
@@ -47,13 +48,18 @@ def run_clustering_pipeline(
     clustering_method: str = "kmeans",
     n_clusters: int | None = 10,
     clustering_params: dict | None = None,
+    scope=None,
 ) -> str:
-    """Submit the full clustering pipeline as a background task. Returns task_id."""
-    session, samples = validate_session_and_active_samples(db, session_id)
+    """Submit the full clustering pipeline as a background task. Returns task_id.
+
+    `scope` (a ClusteringScope) restricts which samples participate. v1 always
+    replaces the session's existing clusters once the run completes.
+    """
+    session, samples = resolve_scoped_samples(db, session_id, scope)
     if n_clusters is not None and len(samples) < n_clusters:
         raise HTTPException(
             status_code=400,
-            detail=f"Need at least {n_clusters} active samples, got {len(samples)}",
+            detail=f"Need at least {n_clusters} samples in scope, got {len(samples)}",
         )
 
     try:
@@ -154,6 +160,8 @@ def _background_pipeline(
         labels=labels,
         embeddings_2d=embeddings_2d,
         n_clusters=actual_n_clusters,
+        features_for_clustering=features_for_clustering,
+        feature_method=feature_method,
     )
 
 
@@ -165,6 +173,8 @@ def _save_clusters(
     labels: np.ndarray,
     embeddings_2d: np.ndarray,
     n_clusters: int,
+    features_for_clustering: np.ndarray,
+    feature_method: str,
 ) -> dict:
     with thread_db_session(db_url) as db:
         # Clear existing clusters
@@ -172,26 +182,49 @@ def _save_clusters(
             db.delete(c)
         db.commit()
 
+        # "Labeled" excludes the auto-created Uncategorized class.
+        uncat = (
+            db.query(SampleClass)
+            .filter(
+                SampleClass.session_id == session_id,
+                SampleClass.name == "Uncategorized",
+            )
+            .first()
+        )
+        uncat_id = uncat.id if uncat else None
+
         clusters_out = []
         cluster_meta: dict[int, dict] = {}
         for k in range(n_clusters):
-            cluster = Cluster(session_id=session_id, color=random_color())
+            quality = compute_quality(features_for_clustering, labels, k)
+            cluster = Cluster(
+                session_id=session_id,
+                color=random_color(),
+                quality_score=quality,
+                feature_method=feature_method,
+            )
             db.add(cluster)
             db.flush()
 
             sample_ids_for_cluster = [
                 sample_data[i]["id"] for i, lbl in enumerate(labels) if lbl == k
             ]
+            labeled_count = 0
             for sid in sample_ids_for_cluster:
                 sample = db.query(Sample).filter(Sample.id == sid).first()
                 if sample:
                     sample.clusters.append(cluster)
+                    if sample.class_id is not None and sample.class_id != uncat_id:
+                        labeled_count += 1
 
             cluster_meta[k] = {"id": cluster.id, "color": cluster.color}
             clusters_out.append({
                 "id": cluster.id,
                 "color": cluster.color,
                 "sample_count": len(sample_ids_for_cluster),
+                "labeled_count": labeled_count,
+                "quality_score": quality,
+                "feature_method": feature_method,
             })
 
         db.commit()

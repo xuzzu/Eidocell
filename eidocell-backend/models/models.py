@@ -90,6 +90,8 @@ class Cluster(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
     color: Mapped[str] = mapped_column(String, default="#808080")
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feature_method: Mapped[str | None] = mapped_column(String, nullable=True)
 
     session: Mapped["Session"] = relationship(back_populates="clusters")
     samples: Mapped[list["Sample"]] = relationship(

@@ -2,7 +2,9 @@ import { apiGet, apiPost, apiDelete, imageUrl } from './client'
 import type {
   ClusterOut, ClusteringResult, RunClusteringRequest,
   RunClusteringPipelineRequest,
-  SplitClusterRequest, MergeClustersRequest, AssignClustersToClassRequest,
+  SplitClusterRequest, SplitClusterResult,
+  MergeClustersRequest, MergeClustersResult,
+  AssignClustersToClassRequest,
   SamplePage,
 } from '@/types'
 
@@ -28,10 +30,10 @@ export const deleteCluster = (sid: string, clusterId: string) =>
   apiDelete(`/sessions/${sid}/clusters/${clusterId}`)
 
 export const splitCluster = (sid: string, clusterId: string, data: SplitClusterRequest) =>
-  apiPost<ClusterOut[]>(`/sessions/${sid}/clusters/${clusterId}/split`, data)
+  apiPost<SplitClusterResult>(`/sessions/${sid}/clusters/${clusterId}/split`, data)
 
 export const mergeClusters = (sid: string, data: MergeClustersRequest) =>
-  apiPost<ClusterOut>(`/sessions/${sid}/clusters/merge`, data)
+  apiPost<MergeClustersResult>(`/sessions/${sid}/clusters/merge`, data)
 
 export const assignClustersToClass = (sid: string, data: AssignClustersToClassRequest) =>
   apiPost<{ updated: number }>(`/sessions/${sid}/clusters/assign-class`, data)

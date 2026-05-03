@@ -11,6 +11,7 @@ const props = defineProps<{
   isSingleSelected: boolean
   isDragTarget: boolean
   isDragging: boolean
+  isRecentlyAdded?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -36,6 +37,11 @@ const isSelected = computed(() => clustersStore.selectedClusterIds.has(props.clu
 const showSplitPopup = ref(false)
 const splitCount = ref(2)
 
+const labeledPct = computed(() => {
+  if (!props.cluster.sample_count) return 0
+  return Math.round((props.cluster.labeled_count / props.cluster.sample_count) * 100)
+})
+
 function onSplitConfirm() {
   emit('split', props.cluster.id, splitCount.value)
   showSplitPopup.value = false
@@ -45,8 +51,10 @@ function onSplitConfirm() {
 <template>
   <div
     :data-cluster-id="cluster.id"
+    :data-pulse="isRecentlyAdded ? 'true' : 'false'"
+    :style="{ '--cluster-c': cluster.color }"
     draggable="true"
-    class="bg-base-100 shadow-sm border rounded-[2px] transition-all cursor-pointer group flex flex-col relative"
+    class="cluster-card bg-base-100 shadow-sm border rounded-[2px] transition-all cursor-pointer group flex flex-col relative"
     :class="[
       isDragging ? 'opacity-40' : '',
       isDragTarget ? 'ring-2 ring-success border-success scale-[1.02]' : (isSelected ? 'border-primary ring-1 ring-primary' : 'border-base-300 hover:border-neutral'),
@@ -110,6 +118,15 @@ function onSplitConfirm() {
           {{ cluster.sample_count }}
         </span>
 
+        <!-- % Labeled badge — shown when any samples have a real (non-Uncategorized) class -->
+        <span
+          v-if="cluster.labeled_count > 0"
+          class="text-[9px] font-mono font-bold tracking-widest text-success/80"
+          :title="`${cluster.labeled_count} of ${cluster.sample_count} samples labeled`"
+        >
+          {{ labeledPct }}%
+        </span>
+
         <!-- Scissors (split) — only when single-selected -->
         <button
           v-if="isSingleSelected"
@@ -132,3 +149,18 @@ function onSplitConfirm() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.cluster-card[data-pulse='true'] {
+  animation: cluster-pulse 500ms ease-out 3;
+}
+
+@keyframes cluster-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--cluster-c, currentColor);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+</style>

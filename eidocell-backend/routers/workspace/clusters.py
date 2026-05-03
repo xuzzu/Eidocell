@@ -11,6 +11,8 @@ from schemas.workspace.clusters import (
     AssignClustersToClassRequest,
     ClusterOut,
     ClusteringResult,
+    SplitClusterResult,
+    MergeClustersResult,
 )
 from schemas.workspace.gallery import SamplePage
 from services.workspace import clusters_service
@@ -35,6 +37,7 @@ def run_clustering_pipeline(
         clustering_method=data.clustering_method,
         n_clusters=data.n_clusters,
         clustering_params=data.clustering_params,
+        scope=data.scope,
     )
     return {"task_id": task_id}
 
@@ -87,7 +90,7 @@ def delete_cluster(
     clusters_service.delete_cluster(db, cluster_id)
 
 
-@router.post("/{cluster_id}/split", response_model=list[ClusterOut])
+@router.post("/{cluster_id}/split", response_model=SplitClusterResult)
 def split_cluster(
     session_id: str,
     cluster_id: str,
@@ -97,7 +100,7 @@ def split_cluster(
     return clusters_service.split_cluster(db, cluster_id, data.n_sub_clusters)
 
 
-@router.post("/merge", response_model=ClusterOut)
+@router.post("/merge", response_model=MergeClustersResult)
 def merge_clusters(
     session_id: str,
     data: MergeClustersRequest,

@@ -35,7 +35,7 @@ from core.processors.inference.feature_extraction import (
 )
 from core.task_manager import TaskCancelledException
 from core.utils import get_active_samples
-from models.models import Mask, Sample, Session
+from models.models import Mask, Sample, SampleClass, Session
 
 logger = logging.getLogger("eidocell.pipeline_utils")
 
@@ -316,6 +316,84 @@ def project_to_2d(features: np.ndarray) -> np.ndarray:
     n_comp = min(2, features.shape[0], features.shape[1])
     return PCA(n_components=n_comp).fit_transform(features)
 
+
+# ── Scope resolution ────────────────────────────────────────────────────
+
+
+def resolve_scoped_samples(
+    db: DbSession, session_id: str, scope
+) -> tuple[Session, list[Sample]]:
+    """Resolve a `ClusteringScope` to (session, samples).
+
+    Always restricts to active samples. Raises 400 if the resolved set is empty.
+    """
+    session = db.query(Session).filter(Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    mode = getattr(scope, "mode", "all") if scope is not None else "all"
+    q = (
+        db.query(Sample)
+        .filter(Sample.session_id == session_id, Sample.is_active == True)  # noqa: E712
+    )
+
+    if mode == "unlabeled":
+        # Sessions auto-assign new samples to an "Uncategorized" class.
+        # An "unlabeled" sample is one with class_id IS NULL or pointing to
+        # that placeholder class.
+        uncat = (
+            db.query(SampleClass)
+            .filter(
+                SampleClass.session_id == session_id,
+                SampleClass.name == "Uncategorized",
+            )
+            .first()
+        )
+        if uncat is None:
+            q = q.filter(Sample.class_id.is_(None))
+        else:
+            q = q.filter(
+                (Sample.class_id.is_(None)) | (Sample.class_id == uncat.id)
+            )
+    elif mode == "class":
+        class_id = getattr(scope, "class_id", None)
+        if not class_id:
+            raise HTTPException(status_code=400, detail="scope.class_id required for mode='class'")
+        q = q.filter(Sample.class_id == class_id)
+    elif mode == "samples":
+        sample_ids = getattr(scope, "sample_ids", None) or []
+        if not sample_ids:
+            raise HTTPException(status_code=400, detail="scope.sample_ids required for mode='samples'")
+        q = q.filter(Sample.id.in_(sample_ids))
+    elif mode != "all":
+        raise HTTPException(status_code=400, detail=f"Unknown scope mode: {mode}")
+
+    samples = q.order_by(Sample.storage_index).all()
+    if not samples:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No active samples match scope (mode={mode})",
+        )
+    return session, samples
+
+
+# ── Cluster quality metric ──────────────────────────────────────────────
+
+
+def compute_quality(
+    features: np.ndarray, labels: np.ndarray, k: int
+) -> float | None:
+    """Mean Euclidean distance to centroid for cluster `k`.
+
+    Lower = tighter. Returns None for clusters with fewer than 2 members.
+    """
+    rows = features[labels == k]
+    if len(rows) < 2:
+        return None
+    centroid = rows.mean(axis=0)
+    return float(np.linalg.norm(rows - centroid, axis=1).mean())
+
+
 __all__ = [
     "validate_session_and_active_samples",
     "snapshot_samples",
@@ -327,4 +405,6 @@ __all__ = [
     "task_context",
     "DEFAULT_FLUSH_EVERY",
     "project_to_2d",
+    "resolve_scoped_samples",
+    "compute_quality",
 ]

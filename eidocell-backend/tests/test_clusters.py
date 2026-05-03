@@ -160,13 +160,16 @@ def test_split_cluster(client, session_with_features):
         json={"n_sub_clusters": 3},
     )
     assert resp.status_code == 200
-    new_clusters = resp.json()
+    body = resp.json()
+    assert body["deleted_cluster_id"] == big_cluster["id"]
+    new_clusters = body["new_clusters"]
     assert len(new_clusters) == 3
     assert sum(c["sample_count"] for c in new_clusters) == big_cluster["sample_count"]
 
     # Original cluster should be gone, total = 1 remaining + 3 new = 4
     all_clusters = client.get(f"/sessions/{sid}/clusters/").json()
     assert len(all_clusters) == 4
+    assert big_cluster["id"] not in {c["id"] for c in all_clusters}
 
 
 # ── Merge ───────────────────────────────────────────────────────────────
@@ -184,12 +187,15 @@ def test_merge_clusters(client, session_with_features):
         "cluster_ids": ids_to_merge,
     })
     assert resp.status_code == 200
-    merged = resp.json()
+    body = resp.json()
+    assert set(body["deleted_cluster_ids"]) == set(ids_to_merge)
+    merged = body["new_cluster"]
     assert merged["sample_count"] == expected_count
 
     # Should have 2 clusters now: 1 untouched + 1 merged
     all_clusters = client.get(f"/sessions/{sid}/clusters/").json()
     assert len(all_clusters) == 2
+    assert set(all_clusters[i]["id"] for i in range(len(all_clusters))).isdisjoint(set(ids_to_merge))
 
 
 def test_merge_clusters_insufficient(client, session_with_features):
@@ -242,3 +248,42 @@ def test_rerun_clustering_clears_old(client, session_with_features):
 
     client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 5})
     assert len(client.get(f"/sessions/{sid}/clusters/").json()) == 5
+
+
+# ── New metric fields ──────────────────────────────────────────────────
+
+
+def test_list_clusters_includes_quality_and_labeled(client, session_with_features):
+    """list_clusters should expose quality_score and labeled_count after a run."""
+    sid = session_with_features["id"]
+    client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
+
+    clusters = client.get(f"/sessions/{sid}/clusters/").json()
+    for c in clusters:
+        assert "quality_score" in c
+        assert "labeled_count" in c
+        # quality_score is computed during run_clustering on the feature space
+        assert c["quality_score"] is None or c["quality_score"] >= 0
+        # New samples are auto-assigned to "Uncategorized", which doesn't count
+        # toward labeled_count.
+        assert c["labeled_count"] == 0
+
+
+def test_labeled_count_after_assign(client, session_with_features):
+    sid = session_with_features["id"]
+    client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
+
+    new_class = client.post(f"/sessions/{sid}/classes", json={
+        "name": "Group A", "color": "#00FF00",
+    }).json()
+
+    clusters = client.get(f"/sessions/{sid}/clusters/").json()
+    target = clusters[0]
+    client.post(f"/sessions/{sid}/clusters/assign-class", json={
+        "cluster_ids": [target["id"]],
+        "class_id": new_class["id"],
+    })
+
+    refreshed = client.get(f"/sessions/{sid}/clusters/").json()
+    by_id = {c["id"]: c for c in refreshed}
+    assert by_id[target["id"]]["labeled_count"] == target["sample_count"]

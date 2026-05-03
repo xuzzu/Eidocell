@@ -2,6 +2,9 @@ export interface ClusterOut {
   id: string
   color: string
   sample_count: number
+  labeled_count: number
+  quality_score: number | null
+  feature_method: string | null
 }
 
 export interface ClusteringResult {
@@ -13,6 +16,14 @@ export interface RunClusteringRequest {
   n_clusters: number
 }
 
+export type ClusteringScopeMode = 'all' | 'unlabeled' | 'class' | 'samples'
+
+export interface ClusteringScope {
+  mode: ClusteringScopeMode
+  class_id?: string | null
+  sample_ids?: string[] | null
+}
+
 export interface RunClusteringPipelineRequest {
   feature_method: string
   dim_reduction_method: string | null
@@ -20,6 +31,7 @@ export interface RunClusteringPipelineRequest {
   clustering_method: string
   n_clusters: number | null
   clustering_params: Record<string, unknown>
+  scope?: ClusteringScope
 }
 
 export interface ClusterEmbeddingPoint {
@@ -40,8 +52,18 @@ export interface SplitClusterRequest {
   n_sub_clusters: number
 }
 
+export interface SplitClusterResult {
+  new_clusters: ClusterOut[]
+  deleted_cluster_id: string
+}
+
 export interface MergeClustersRequest {
   cluster_ids: string[]
+}
+
+export interface MergeClustersResult {
+  new_cluster: ClusterOut
+  deleted_cluster_ids: string[]
 }
 
 export interface AssignClustersToClassRequest {
@@ -49,3 +71,9 @@ export interface AssignClustersToClassRequest {
   class_id: string
 }
 
+export type ClusterSortMode =
+  | 'manual'
+  | 'count_desc'
+  | 'count_asc'
+  | 'labeled_desc'
+  | 'quality_desc'

@@ -28,6 +28,15 @@ def _run_migrations():
                     "ALTER TABLE gates ADD COLUMN parent_gate_id VARCHAR REFERENCES gates(id)"
                 ))
 
+        if "clusters" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("clusters")}
+            if "quality_score" not in columns:
+                logger.info("Migration: adding clusters.quality_score column")
+                conn.execute(text("ALTER TABLE clusters ADD COLUMN quality_score FLOAT"))
+            if "feature_method" not in columns:
+                logger.info("Migration: adding clusters.feature_method column")
+                conn.execute(text("ALTER TABLE clusters ADD COLUMN feature_method VARCHAR"))
+
 
 _run_migrations()
 

@@ -1,9 +1,14 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useSessionStore } from './session'
 import * as clustersApi from '@/api/clusters'
 import * as featuresApi from '@/api/features'
-import type { ClusterOut, ClusterEmbeddingPoint, FeatureExtractionMethod, SamplePage } from '@/types'
+import type {
+  ClusterOut, ClusterEmbeddingPoint, ClusteringScope, ClusterSortMode,
+  FeatureExtractionMethod, SamplePage,
+} from '@/types'
+
+const PULSE_MS = 1500
 
 export const useClustersStore = defineStore('clusters', () => {
   const sessionStore = useSessionStore()
@@ -14,6 +19,14 @@ export const useClustersStore = defineStore('clusters', () => {
   const loading = ref(false)
   const selectedClusterIds = ref<Set<string>>(new Set())
 
+  // Recently mutated IDs — drive the merge/split pulse + auto-scroll.
+  // Stored as plain Sets and replaced (not mutated) so Vue reactivity tracks them.
+  const recentlyAddedIds = ref<Set<string>>(new Set())
+  const recentlyRemovedIds = ref<Set<string>>(new Set())
+
+  // Sorting
+  const sortMode = ref<ClusterSortMode>('manual')
+
   // Pipeline parameters
   const featureMethod = ref('mobilenetv3')
   const dimReductionMethod = ref<string | null>('pca')
@@ -21,6 +34,7 @@ export const useClustersStore = defineStore('clusters', () => {
   const clusteringMethod = ref('kmeans')
   const nClusters = ref(10)
   const clusteringParams = ref<Record<string, unknown>>({})
+  const scope = ref<ClusteringScope>({ mode: 'all', class_id: null, sample_ids: null })
 
   // Available methods (fetched from API)
   const featureMethods = ref<FeatureExtractionMethod[]>([])
@@ -35,6 +49,32 @@ export const useClustersStore = defineStore('clusters', () => {
   const selectedPreviewClusterId = ref<string | null>(null)
   const clusterSamples = ref<SamplePage | null>(null)
 
+  // ── Sorted view ─────────────────────────────────────────────────────
+  const sortedClusters = computed(() => {
+    const arr = [...clusters.value]
+    const mode = sortMode.value
+    if (mode === 'manual') return arr
+
+    const safePct = (c: ClusterOut) =>
+      c.sample_count > 0 ? c.labeled_count / c.sample_count : 0
+
+    if (mode === 'count_desc') {
+      arr.sort((a, b) => b.sample_count - a.sample_count)
+    } else if (mode === 'count_asc') {
+      arr.sort((a, b) => a.sample_count - b.sample_count)
+    } else if (mode === 'labeled_desc') {
+      arr.sort((a, b) => safePct(b) - safePct(a))
+    } else if (mode === 'quality_desc') {
+      // Lower mean-distance = tighter; nulls last.
+      arr.sort((a, b) => {
+        const av = a.quality_score ?? Number.POSITIVE_INFINITY
+        const bv = b.quality_score ?? Number.POSITIVE_INFINITY
+        return av - bv
+      })
+    }
+    return arr
+  })
+
   function $reset() {
     clusters.value = []
     embeddings.value = []
@@ -44,7 +84,39 @@ export const useClustersStore = defineStore('clusters', () => {
     showScatterPlot.value = false
     selectedPreviewClusterId.value = null
     clusterSamples.value = null
+    recentlyAddedIds.value = new Set()
+    recentlyRemovedIds.value = new Set()
+    sortMode.value = 'manual'
+    scope.value = { mode: 'all', class_id: null, sample_ids: null }
   }
+
+  // ── Recent-IDs animation tracking ──────────────────────────────────
+
+  function _markRecentlyAdded(ids: string[]) {
+    if (!ids.length) return
+    const next = new Set(recentlyAddedIds.value)
+    ids.forEach(id => next.add(id))
+    recentlyAddedIds.value = next
+    setTimeout(() => {
+      const after = new Set(recentlyAddedIds.value)
+      ids.forEach(id => after.delete(id))
+      recentlyAddedIds.value = after
+    }, PULSE_MS)
+  }
+
+  function _markRecentlyRemoved(ids: string[]) {
+    if (!ids.length) return
+    const next = new Set(recentlyRemovedIds.value)
+    ids.forEach(id => next.add(id))
+    recentlyRemovedIds.value = next
+    setTimeout(() => {
+      const after = new Set(recentlyRemovedIds.value)
+      ids.forEach(id => after.delete(id))
+      recentlyRemovedIds.value = after
+    }, PULSE_MS)
+  }
+
+  // ── API actions ────────────────────────────────────────────────────
 
   async function fetchFeatureMethods() {
     if (!sessionStore.currentSessionId) return
@@ -72,6 +144,7 @@ export const useClustersStore = defineStore('clusters', () => {
         clustering_method: clusteringMethod.value,
         n_clusters: isEvoc ? evocApproxN : nClusters.value,
         clustering_params: isEvoc ? evocParams : clusteringParams.value,
+        scope: scope.value,
       })
       taskId.value = result.task_id
     } catch {
@@ -82,8 +155,12 @@ export const useClustersStore = defineStore('clusters', () => {
   function onPipelineComplete(task: any) {
     loading.value = false
     if (task.result) {
-      clusters.value = task.result.clusters as ClusterOut[]
+      const previousIds = new Set(clusters.value.map(c => c.id))
+      const nextClusters = task.result.clusters as ClusterOut[]
+      clusters.value = nextClusters
       embeddings.value = task.result.embeddings as ClusterEmbeddingPoint[]
+      const newIds = nextClusters.map(c => c.id).filter(id => !previousIds.has(id))
+      _markRecentlyAdded(newIds)
     }
     taskId.value = null
   }
@@ -95,19 +172,32 @@ export const useClustersStore = defineStore('clusters', () => {
 
   async function splitCluster(clusterId: string, nSubClusters: number) {
     if (!sessionStore.currentSessionId) return
-    await clustersApi.splitCluster(sessionStore.currentSessionId, clusterId, {
+    const result = await clustersApi.splitCluster(sessionStore.currentSessionId, clusterId, {
       n_sub_clusters: nSubClusters,
     })
-    await fetchClusters()
+    // Local diff: remove parent, append children.
+    clusters.value = [
+      ...clusters.value.filter(c => c.id !== result.deleted_cluster_id),
+      ...result.new_clusters,
+    ]
+    selectedClusterIds.value.delete(result.deleted_cluster_id)
+    _markRecentlyRemoved([result.deleted_cluster_id])
+    _markRecentlyAdded(result.new_clusters.map(c => c.id))
   }
 
   async function mergeClusters(clusterIds: string[]) {
     if (!sessionStore.currentSessionId) return
-    await clustersApi.mergeClusters(sessionStore.currentSessionId, {
+    const result = await clustersApi.mergeClusters(sessionStore.currentSessionId, {
       cluster_ids: clusterIds,
     })
+    const deleted = new Set(result.deleted_cluster_ids)
+    clusters.value = [
+      ...clusters.value.filter(c => !deleted.has(c.id)),
+      result.new_cluster,
+    ]
     selectedClusterIds.value.clear()
-    await fetchClusters()
+    _markRecentlyRemoved(result.deleted_cluster_ids)
+    _markRecentlyAdded([result.new_cluster.id])
   }
 
   async function assignToClass(clusterIds: string[], classId: string) {
@@ -124,7 +214,8 @@ export const useClustersStore = defineStore('clusters', () => {
     if (!sessionStore.currentSessionId) return
     await clustersApi.deleteCluster(sessionStore.currentSessionId, clusterId)
     selectedClusterIds.value.delete(clusterId)
-    await fetchClusters()
+    clusters.value = clusters.value.filter(c => c.id !== clusterId)
+    _markRecentlyRemoved([clusterId])
   }
 
   async function clearAll() {
@@ -188,7 +279,8 @@ export const useClustersStore = defineStore('clusters', () => {
   }
 
   return {
-    clusters, embeddings, loading, selectedClusterIds,
+    clusters, sortedClusters, embeddings, loading, selectedClusterIds,
+    recentlyAddedIds, recentlyRemovedIds, sortMode, scope,
     featureMethod, dimReductionMethod, dimReductionParams,
     clusteringMethod, nClusters, clusteringParams,
     featureMethods, taskId, showScatterPlot,

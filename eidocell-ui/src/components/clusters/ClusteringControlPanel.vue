@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useClustersStore } from '@/stores/clusters'
+import { useGalleryStore } from '@/stores/gallery'
+import type { ClusteringScopeMode } from '@/types'
 
 const clusters = useClustersStore()
+const gallery = useGalleryStore()
 
 const clusteringMethods = [
   { value: 'kmeans', label: 'K-Means' },
@@ -13,6 +16,13 @@ const dimMethods = [
   { value: 'pca', label: 'PCA' },
   { value: 'umap', label: 'UMAP' },
   { value: null, label: 'None' },
+]
+
+const scopeOptions: { value: ClusteringScopeMode; label: string }[] = [
+  { value: 'all', label: 'All active samples' },
+  { value: 'unlabeled', label: 'Unlabeled only' },
+  { value: 'class', label: 'Specific class' },
+  { value: 'samples', label: 'Selected samples' },
 ]
 
 const currentDimMethod = computed({
@@ -26,10 +36,85 @@ const currentClusteringMethod = computed({
 })
 
 const isEvoc = computed(() => clusters.clusteringMethod === 'evoc')
+
+const selectableClasses = computed(() =>
+  gallery.classes.filter(c => c.name !== 'Uncategorized'),
+)
+
+const selectedSampleCount = computed(() => gallery.selectedIds.size)
+
+// Keep scope payload tidy: clear class_id when not in 'class' mode, etc.
+watch(
+  () => clusters.scope.mode,
+  (mode) => {
+    if (mode !== 'class') clusters.scope.class_id = null
+    if (mode === 'samples') {
+      clusters.scope.sample_ids = Array.from(gallery.selectedIds)
+    } else {
+      clusters.scope.sample_ids = null
+    }
+  },
+)
+
+// When the user picks "Selected samples", capture the current selection into
+// scope. We snapshot at scope time rather than reactively on every gallery
+// change so the user can pick a snapshot then return to clusters view.
+function refreshSelectedSnapshot() {
+  clusters.scope.sample_ids = Array.from(gallery.selectedIds)
+}
 </script>
 
 <template>
   <div class="flex flex-col gap-6">
+    <!-- Scope -->
+    <div class="form-control">
+      <label class="label pb-2">
+        <span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Scope</span>
+      </label>
+      <select
+        v-model="clusters.scope.mode"
+        class="select select-bordered rounded-[2px] w-full font-mono text-xs focus:outline-neutral"
+      >
+        <option v-for="opt in scopeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+      </select>
+
+      <div
+        v-if="clusters.scope.mode === 'class'"
+        class="mt-3 flex flex-col gap-2 p-3 bg-base-100 border border-base-300 rounded-[2px]"
+      >
+        <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/50">Class</span>
+        <select
+          v-model="clusters.scope.class_id"
+          class="select select-bordered select-xs rounded-[2px] w-full font-mono text-[11px] focus:outline-neutral"
+        >
+          <option :value="null" disabled>— pick a class —</option>
+          <option v-for="c in selectableClasses" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </div>
+
+      <div
+        v-if="clusters.scope.mode === 'samples'"
+        class="mt-3 flex items-center justify-between gap-3 p-3 bg-base-100 border border-base-300 rounded-[2px]"
+      >
+        <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/50">
+          {{ selectedSampleCount }} selected
+        </span>
+        <button
+          class="text-[9px] font-bold tracking-widest uppercase text-neutral/60 hover:text-neutral underline-offset-2 hover:underline"
+          @click="refreshSelectedSnapshot"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <p
+        v-if="clusters.scope.mode !== 'all'"
+        class="mt-2 text-[9px] text-neutral/40 tracking-widest uppercase"
+      >
+        Will replace existing clusters
+      </p>
+    </div>
+
     <!-- Feature Extractor -->
     <div class="form-control">
       <label class="label pb-2">
