@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { Tag, X } from 'lucide-vue-next'
+import { Sparkles, Tag, X } from 'lucide-vue-next'
 import { useGalleryStore } from '@/stores/gallery'
 
 const gallery = useGalleryStore()
@@ -9,6 +9,10 @@ const selectedClassId = ref<string | null>(null)
 async function assignToClass() {
   await gallery.assignSelectedToClass(selectedClassId.value)
   selectedClassId.value = null
+}
+
+function findSimilar() {
+  gallery.openSimilarityDialog?.(Array.from(gallery.selectedIds))
 }
 </script>
 
@@ -34,6 +38,14 @@ async function assignToClass() {
       @click="assignToClass"
     >
       Assign
+    </button>
+
+    <button
+      class="flex items-center gap-1.5 h-8 px-4 rounded-[2px] text-[11px] font-bold tracking-widest uppercase transition-colors bg-base-100/10 hover:bg-base-100/20"
+      @click="findSimilar"
+    >
+      <Sparkles class="w-3.5 h-3.5" />
+      Find Similar
     </button>
 
     <button class="flex items-center gap-1.5 h-8 px-3 ml-auto rounded-[2px] text-[10px] font-bold tracking-widest uppercase transition-colors hover:bg-base-100/20" @click="gallery.clearSelection()">

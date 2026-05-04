@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
+import { Sparkles } from 'lucide-vue-next'
 import type { ClassOut } from '@/types'
 
 const props = defineProps<{
@@ -11,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   assignClass: [classId: string]
+  findSimilar: []
   close: []
 }>()
 
@@ -38,6 +40,15 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
     :style="style"
     @mousedown.stop
   >
+    <!-- Find similar -->
+    <button
+      class="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] font-mono font-bold tracking-widest uppercase hover:bg-neutral hover:text-neutral-content transition-colors text-left"
+      @click="emit('findSimilar'); emit('close')"
+    >
+      <Sparkles class="w-3.5 h-3.5 shrink-0" />
+      Find similar ({{ selectedIds.length }})
+    </button>
+
     <!-- Assign to class -->
     <template v-if="classes.length > 0">
       <div class="px-3 py-1.5 border-b border-base-300 mb-1">
@@ -59,7 +70,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
     </template>
 
     <template v-if="classes.length === 0">
-      <div class="px-3 py-2 text-[10px] font-mono text-neutral/30 tracking-wider">No classes defined</div>
+      <div class="border-t border-base-300 px-3 py-2 text-[10px] font-mono text-neutral/30 tracking-wider">No classes defined</div>
     </template>
   </div>
 </template>

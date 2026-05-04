@@ -5,4 +5,19 @@
   body {
     @apply bg-base-100 text-base-content antialiased;
   }
+
+  /* Desktop-app feel: no text selection by default. Re-enabled for
+     editable controls so typing/copy-paste in fields still works. */
+  html {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"],
+  [contenteditable=""] {
+    user-select: text;
+    -webkit-user-select: text;
+  }
 }

@@ -7,7 +7,7 @@ from sqlalchemy import inspect, text
 
 from db.session import engine, Base
 from routers import sessions, features, export, settings, tasks, learning, notifications
-from routers.workspace import gallery, classes, clusters, segmentation, analysis
+from routers.workspace import gallery, classes, clusters, segmentation, analysis, similarity
 
 logger = logging.getLogger("eidocell.migrations")
 
@@ -66,6 +66,7 @@ app.include_router(classes.router)
 app.include_router(clusters.router)
 app.include_router(segmentation.router)
 app.include_router(analysis.router)
+app.include_router(similarity.router)
 app.include_router(features.router)
 app.include_router(export.router)
 app.include_router(settings.router)

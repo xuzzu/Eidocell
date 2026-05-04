@@ -1,36 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useSessionStore } from '@/stores/session'
+import { computed, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { useGalleryStore } from '@/stores/gallery'
-import { sampleThumbnailUrl } from '@/api/gallery'
-import { maskOverlayUrl } from '@/api/segmentation'
 import type { SampleOut } from '@/types'
 import { useDragSelect } from '@/composables/useDragSelect'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import GalleryContextMenu from '@/components/gallery/GalleryContextMenu.vue'
-
-const sessionStore = useSessionStore()
+import SampleCardGrid from '@/components/gallery/SampleCardGrid.vue'
 
 const gallery = useGalleryStore()
-
-const sid = computed(() => sessionStore.currentSessionId!)
 
 const props = defineProps<{
   zoomLevel: number
   maskView: boolean
   inspectMode: boolean
+  dragTrigger?: HTMLElement | null
 }>()
-
-const colsClass = computed(() => {
-  const map: Record<number, string> = {
-    1: 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
-    2: 'grid-cols-3 md:grid-cols-5 lg:grid-cols-6',
-    3: 'grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10',
-    4: 'grid-cols-6 md:grid-cols-8 lg:grid-cols-12 xl:grid-cols-12',
-    5: 'grid-cols-8 md:grid-cols-12 lg:grid-cols-12 xl:grid-cols-12',
-  }
-  return map[props.zoomLevel] ?? map[3]
-})
 
 // Infinite scroll
 const scrollContainer = ref<HTMLDivElement | null>(null)
@@ -56,34 +40,22 @@ function onScroll() {
   }
 }
 
-function isSelected(id: string) {
-  return gallery.selectedIds.has(id)
+function onCardInspect(sample: SampleOut) {
+  gallery.detailSample = sample
 }
 
-function getImageSrc(sample: SampleOut) {
-  if (props.maskView && sample.has_mask) {
-    return maskOverlayUrl(sid.value, sample.id, gallery.maskVersion)
-  }
-  return sampleThumbnailUrl(sid.value, sample.id)
-}
-
-function onClick(sample: SampleOut) {
-  if (props.inspectMode) {
-    gallery.detailSample = sample
-  } else {
-    // In selection mode, single click should replace selection
-    // wait, for cluster it is selectSingle. We'll do setSelection here
-    gallery.setSelection([sample.id])
-  }
-}
-
-// Drag selection
+// Drag selection. Listen on the wider `dragTrigger` element (e.g. the gallery
+// pane wrapper supplied by GalleryView) so mousedowns in the surrounding
+// margins also start a rectangle. The rectangle itself is clamped to
+// `scrollContainer` bounds inside the composable.
+const dragTriggerRef = computed(() => props.dragTrigger ?? null)
 const { selectionRect } = useDragSelect(
   scrollContainer,
   '[data-sample-id]',
   'data-sample-id',
   (ids) => gallery.setSelection(ids),
-  gallery.selectedIds as any,
+  toRef(gallery, 'selectedIds'),
+  dragTriggerRef,
 )
 
 // Context menu
@@ -125,35 +97,17 @@ watch(scrollContainer, (el, oldEl) => {
         }"
       />
 
-      <div class="grid gap-2" :class="colsClass">
-        <div
-          v-for="sample in gallery.samples"
-          :key="sample.id"
-          :data-sample-id="sample.id"
-          class="cursor-pointer rounded-[2px] overflow-hidden transition-all flex flex-col bg-base-100"
-          :class="isSelected(sample.id) ? 'ring-2 ring-primary ring-offset-1 ring-offset-base-200' : 'hover:ring-1 hover:ring-neutral/30'"
-          @click.exact="onClick(sample)"
-          @click.ctrl="gallery.toggleSelection(sample.id)"
-          @click.meta="gallery.toggleSelection(sample.id)"
-          @contextmenu.prevent="onContextmenu($event, sample.id)"
-        >
-          <!-- Filename label at top with class color background -->
-          <div
-            class="px-1.5 py-0.5 truncate text-[9px] text-white font-mono font-medium leading-tight shrink-0"
-            :style="{ backgroundColor: sample.class_color || '#9ca3af' }"
-          >
-            {{ sample.filename }}
-          </div>
-          <div class="w-full aspect-square relative bg-base-200 flex items-center justify-center">
-            <img
-              :src="getImageSrc(sample)"
-              :alt="sample.filename"
-              class="absolute inset-0 w-full h-full object-contain"
-              loading="lazy"
-            />
-          </div>
-        </div>
-      </div>
+      <SampleCardGrid
+        :samples="gallery.samples"
+        :selected-ids="gallery.selectedIds"
+        :zoom-level="zoomLevel"
+        :mask-view="maskView"
+        :mask-version="gallery.maskVersion"
+        :inspect-mode="inspectMode"
+        @update:selected-ids="(ids) => gallery.setSelection(Array.from(ids))"
+        @inspect="onCardInspect"
+        @contextmenu="onContextmenu"
+      />
 
       <div v-if="loadingMore" class="flex justify-center py-4">
         <LoadingSpinner size="loading-sm" />
@@ -176,6 +130,7 @@ watch(scrollContainer, (el, oldEl) => {
       :selected-ids="Array.from(gallery.selectedIds)"
       :classes="gallery.classes"
       @assign-class="(id) => gallery.assignSelectedToClass(id)"
+      @find-similar="gallery.openSimilarityDialog?.(Array.from(gallery.selectedIds))"
       @close="ctxMenu.visible = false"
     />
   </div>
