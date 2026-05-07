@@ -1,118 +1,170 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { RotateCcw, GitMerge } from 'lucide-vue-next'
 import { useAnalysisStore } from '@/stores/analysis'
-import { useSessionStore } from '@/stores/session'
-import * as analysisApi from '@/api/analysis'
-import type { GateTreeNode } from '@/api/analysis'
+import type { PopulationTreeNode as TreeNode } from '@/types'
 import PopulationTreeNode from '@/components/analysis/PopulationTreeNode.vue'
 
 const analysis = useAnalysisStore()
-const sessionStore = useSessionStore()
 
-const tree = ref<GateTreeNode[]>([])
-const expandedIds = ref<Set<string>>(new Set())
-const loading = ref(false)
+const expandedIds = ref<Set<string>>(new Set(['__root__']))
+const draggingId = ref<string | null>(null)
 
-async function fetchTree() {
-  const sid = sessionStore.currentSessionId
-  if (!sid) return
-  loading.value = true
-  try {
-    tree.value = await analysisApi.getPopulationTree(sid)
-    // Auto-expand all nodes that have children
-    function collectIds(nodes: GateTreeNode[]) {
-      for (const n of nodes) {
-        if (n.children.length > 0) expandedIds.value.add(n.id)
-        collectIds(n.children)
-      }
-    }
-    collectIds(tree.value)
-  } finally {
-    loading.value = false
+const tree = computed(() => analysis.populationTree)
+
+const plotNames = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {}
+  for (const p of analysis.plots) map[p.id] = p.name
+  return map
+})
+
+const hierarchicalNodes = computed(() => {
+  const flat: TreeNode[] = []
+  function walk(n: TreeNode) {
+    flat.push(n)
+    for (const c of n.children) walk(c)
   }
-}
+  if (tree.value?.root) walk(tree.value.root)
+  return flat
+})
 
-onMounted(() => fetchTree())
+const draggingDescendants = computed<Set<string>>(() => {
+  const ids = new Set<string>()
+  if (!draggingId.value) return ids
+  const start = hierarchicalNodes.value.find(n => n.id === draggingId.value)
+  if (!start) return ids
+  function collect(n: TreeNode) {
+    ids.add(n.id)
+    for (const c of n.children) collect(c)
+  }
+  collect(start)
+  return ids
+})
 
-// Refresh tree when gates change
-watch(() => analysis.gates, () => fetchTree(), { deep: true })
+onMounted(() => {
+  if (!tree.value) analysis.fetchPopulationTree()
+})
+
+watch(
+  () => tree.value,
+  newTree => {
+    if (!newTree) return
+    function autoExpand(n: TreeNode) {
+      if (n.children.length > 0) expandedIds.value.add(n.id)
+      for (const c of n.children) autoExpand(c)
+    }
+    autoExpand(newTree.root)
+  },
+  { immediate: true },
+)
 
 function toggleExpand(id: string) {
-  if (expandedIds.value.has(id)) {
-    expandedIds.value.delete(id)
-  } else {
-    expandedIds.value.add(id)
-  }
+  if (expandedIds.value.has(id)) expandedIds.value.delete(id)
+  else expandedIds.value.add(id)
 }
 
-async function toggleActive(gateId: string, currentActive: boolean) {
-  await analysis.updateGate(gateId, { is_active: !currentActive })
-  await fetchTree()
+function selectPopulation(id: string | null) {
+  // Treat the synthetic root id as null (clears selection / shows all events).
+  analysis.selectPopulation(id === '__root__' ? null : id)
 }
 
-function selectGate(gateId: string) {
-  // Find which plot this gate belongs to and select it
-  function findGate(nodes: GateTreeNode[]): GateTreeNode | null {
-    for (const n of nodes) {
-      if (n.id === gateId) return n
-      const found = findGate(n.children)
-      if (found) return found
-    }
-    return null
-  }
-  const gate = findGate(tree.value)
-  if (gate) {
-    analysis.selectPlot(gate.plot_id)
-  }
+function deleteGate(id: string) {
+  if (id === '__root__') return
+  analysis.deleteGate(id)
 }
 
-function setAsParent(gateId: string) {
-  // Toggle: if already selected as parent, clear it
-  if (analysis.parentGateId === gateId) {
-    analysis.clearParentGate()
-  } else {
-    analysis.selectParentGate(gateId)
-  }
+function onDragStart(id: string) { draggingId.value = id }
+function onDragEnd() { draggingId.value = null }
+
+async function onReparent(sourceId: string, newParentId: string | null) {
+  draggingId.value = null
+  const node = hierarchicalNodes.value.find(n => n.id === sourceId)
+  if (!node) return
+  const target = newParentId === '__root__' ? null : newParentId
+  if ((node.parent_gate_id ?? null) === target) return
+  await analysis.updateGate(sourceId, { parent_gate_id: target })
 }
 </script>
 
 <template>
-  <div v-if="tree.length > 0" class="flex flex-col gap-2">
+  <div class="flex flex-col gap-2">
     <div class="flex items-center justify-between">
       <span class="text-[10px] font-bold tracking-widest uppercase text-neutral/70">Populations</span>
       <button
-        v-if="analysis.parentGateId"
-        class="text-[9px] font-mono font-bold text-info hover:text-info/80 tracking-wider uppercase"
-        @click="analysis.clearParentGate()"
+        v-if="tree && analysis.selectedGateId"
+        class="h-6 px-2 rounded-[2px] flex items-center gap-1.5 text-[9px] font-bold tracking-widest uppercase text-neutral/50 hover:bg-neutral/10 hover:text-neutral transition-colors"
+        title="Clear population selection (show all events)"
+        @click="analysis.resetAllGates()"
       >
-        Clear parent
+        <RotateCcw class="w-3 h-3 stroke-[2px]" />
+        Clear
       </button>
     </div>
 
-    <!-- Active parent indicator -->
-    <div
-      v-if="analysis.parentGate"
-      class="px-2 py-1.5 rounded-[2px] bg-info/10 border border-info/20 flex items-center gap-1.5"
-    >
-      <span class="w-2 h-2 rounded-full shrink-0" :style="{ backgroundColor: analysis.parentGate.color }"></span>
-      <span class="text-[9px] font-mono font-bold text-info truncate">
-        Sub-gating within: {{ analysis.parentGate.name }}
-      </span>
+    <div v-if="!tree" class="text-[10px] font-mono text-neutral/30 tracking-wider">
+      Loading…
     </div>
 
-    <div class="flex flex-col">
+    <div v-else class="flex flex-col">
+      <!-- Column header -->
+      <div class="flex items-center gap-1 h-5 px-1 mb-1 text-[8px] font-mono font-bold tracking-widest uppercase text-neutral/30 border-b border-base-300">
+        <span class="flex-1 min-w-0 ml-7 truncate">Population</span>
+        <span class="shrink-0 mr-1">Count / %</span>
+      </div>
+
+      <!-- Hierarchical tree, rooted at synthetic 'All Events' -->
       <PopulationTreeNode
-        v-for="node in tree"
-        :key="node.id"
-        :node="node"
+        :node="tree.root"
         :depth="0"
+        :is-last="true"
         :expanded-ids="expandedIds"
-        :parent-gate-id="analysis.parentGateId"
+        :plot-names="plotNames"
+        :dragging-id="draggingId"
+        :dragging-descendants="draggingDescendants"
+        :selected-id="analysis.selectedGateId"
         @toggle-expand="toggleExpand"
-        @toggle-active="toggleActive"
-        @select="selectGate"
-        @set-parent="setAsParent"
+        @select="selectPopulation"
+        @delete="deleteGate"
+        @drag-start="onDragStart"
+        @drag-end="onDragEnd"
+        @reparent="onReparent"
       />
+
+      <!-- Boolean populations (flat list) -->
+      <div v-if="tree.booleans.length > 0" class="mt-3">
+        <div class="flex items-center gap-1.5 px-1 pb-1 text-[8px] font-mono font-bold tracking-widest uppercase text-neutral/30 border-b border-base-300">
+          <GitMerge class="w-3 h-3 stroke-[2px]" />
+          <span>Boolean populations</span>
+        </div>
+
+        <div class="flex flex-col mt-1">
+          <PopulationTreeNode
+            v-for="b in tree.booleans"
+            :key="b.id"
+            :node="b"
+            :depth="0"
+            :is-last="true"
+            :expanded-ids="expandedIds"
+            :plot-names="plotNames"
+            :dragging-id="draggingId"
+            :dragging-descendants="draggingDescendants"
+            :selected-id="analysis.selectedGateId"
+            @toggle-expand="toggleExpand"
+            @select="selectPopulation"
+            @delete="deleteGate"
+            @drag-start="onDragStart"
+            @drag-end="onDragEnd"
+            @reparent="onReparent"
+          />
+        </div>
+      </div>
     </div>
+
+    <p
+      v-if="tree && (tree.root.children.length > 0 || tree.booleans.length > 0)"
+      class="text-[9px] font-mono text-neutral/30 leading-snug mt-1"
+    >
+      Click a row to make it the active population. Drag rows to reparent.
+    </p>
   </div>
 </template>

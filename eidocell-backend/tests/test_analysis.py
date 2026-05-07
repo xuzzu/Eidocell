@@ -349,109 +349,124 @@ def test_active_samples_default(client, session_with_masks):
     assert len(resp.json()) == 10  # all active
 
 
-def test_gate_filters_active_samples(client, session_with_masks):
+def test_select_population_filters_active_samples(client, session_with_masks):
     sid = session_with_masks["id"]
 
-    # Get plot data to find value range
     plot = client.post(f"/sessions/{sid}/analysis/plots", json={
         "chart_type": "histogram", "parameters": {"x_variable": "mean_intensity"},
     }).json()
     data = client.get(f"/sessions/{sid}/analysis/plots/{plot['id']}/data").json()
     intensities = sorted(p["values"]["mean_intensity"] for p in data["data"])
 
-    # Create an active gate that only includes samples with intensity above median
+    # Without a selected population, all samples are active.
+    active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
+    assert len(active) == 10
+
     median_val = intensities[len(intensities) // 2]
     gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
         "gate_type": "interval",
         "definition": {"min": median_val, "max": max(intensities) + 1},
         "parameters": ["mean_intensity"],
-        "is_active": True,
     }).json()
 
-    # Active samples should now be filtered
+    # Creating a gate alone does not change is_active.
     active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
-    assert len(active) < 10
+    assert len(active) == 10
+
+    # Selecting the gate as the active population filters samples.
+    resp = client.post(
+        f"/sessions/{sid}/analysis/select-population", json={"gate_id": gate["id"]},
+    )
+    assert resp.status_code == 200
+    active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
     assert len(active) == gate["sample_count"]
+    assert len(active) < 10
 
 
-def test_reset_gates_reactivates_all(client, session_with_masks):
+def test_reset_gates_clears_selection(client, session_with_masks):
     sid = session_with_masks["id"]
 
-    # Create a restrictive gate
     plot = client.post(f"/sessions/{sid}/analysis/plots", json={
         "chart_type": "histogram", "parameters": {"x_variable": "area"},
     }).json()
-    client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
         "gate_type": "interval", "definition": {"min": -1, "max": 0},
-        "parameters": ["area"], "is_active": True,
-    })
+        "parameters": ["area"],
+    }).json()
 
-    # Should have 0 active samples (no area is negative)
+    client.post(
+        f"/sessions/{sid}/analysis/select-population", json={"gate_id": gate["id"]},
+    )
     active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
     assert len(active) == 0
 
-    # Reset
     resp = client.post(f"/sessions/{sid}/analysis/reset-gates")
     assert resp.status_code == 200
-    assert resp.json()["reactivated"] == 10
 
+    selected = client.get(f"/sessions/{sid}/analysis/selected-population").json()
+    assert selected["selected_gate_id"] is None
     active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
     assert len(active) == 10
 
 
-def test_inactive_gate_doesnt_filter(client, session_with_masks):
+def test_unselected_gate_doesnt_filter(client, session_with_masks):
     sid = session_with_masks["id"]
 
     plot = client.post(f"/sessions/{sid}/analysis/plots", json={
         "chart_type": "histogram", "parameters": {"x_variable": "area"},
     }).json()
 
-    # Create a gate but set it inactive
+    # Create a gate but never select it.
     client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
         "gate_type": "interval", "definition": {"min": -1, "max": 0},
-        "parameters": ["area"], "is_active": False,
+        "parameters": ["area"],
     })
 
-    # All samples should still be active
     active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
     assert len(active) == 10
 
 
-def test_multiple_active_gates_union(client, session_with_masks):
-    """Multiple active gates use OR logic: samples in ANY gate are active."""
+def test_boolean_or_gate_unions_populations(client, session_with_masks):
+    """Boolean OR gate yields the union of two source populations."""
     sid = session_with_masks["id"]
 
     plot = client.post(f"/sessions/{sid}/analysis/plots", json={
         "chart_type": "histogram", "parameters": {"x_variable": "mean_intensity"},
     }).json()
 
-    # Get data ranges
     data = client.get(f"/sessions/{sid}/analysis/plots/{plot['id']}/data").json()
     intensities = sorted(p["values"]["mean_intensity"] for p in data["data"])
     mid = intensities[len(intensities) // 2]
 
-    # Gate 1: lower half of intensities
     gate1 = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
         "gate_type": "interval",
         "definition": {"min": min(intensities) - 1, "max": mid},
-        "parameters": ["mean_intensity"], "is_active": True,
+        "parameters": ["mean_intensity"],
     }).json()
-
-    active_after_one = client.get(f"/sessions/{sid}/analysis/active-samples").json()
-    assert len(active_after_one) == gate1["sample_count"]
-    assert len(active_after_one) < 10  # not all samples
-
-    # Gate 2: upper half of intensities
     gate2 = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
         "gate_type": "interval",
         "definition": {"min": mid, "max": max(intensities) + 1},
-        "parameters": ["mean_intensity"], "is_active": True,
+        "parameters": ["mean_intensity"],
     }).json()
 
-    # Union of both gates should cover all (or nearly all) samples
-    active_after_two = client.get(f"/sessions/{sid}/analysis/active-samples").json()
-    assert len(active_after_two) >= len(active_after_one)
-    assert len(active_after_two) >= gate2["sample_count"]
+    bool_resp = client.post(f"/sessions/{sid}/analysis/boolean-gates", json={
+        "name": "lower OR upper",
+        "operator": "OR",
+        "source_gate_ids": [gate1["id"], gate2["id"]],
+        "color": "#9333EA",
+    })
+    assert bool_resp.status_code == 201
+    bool_gate = bool_resp.json()
+    assert bool_gate["gate_type"] == "boolean"
+    assert bool_gate["operator"] == "OR"
+    # Union of two intervals that together cover all samples.
+    assert bool_gate["sample_count"] == 10
+
+    client.post(
+        f"/sessions/{sid}/analysis/select-population", json={"gate_id": bool_gate["id"]},
+    )
+    active = client.get(f"/sessions/{sid}/analysis/active-samples").json()
+    assert len(active) == 10
 
 
 def test_delete_plot_deletes_gates(client, session_with_masks):

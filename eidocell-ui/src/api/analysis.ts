@@ -1,5 +1,9 @@
 import { apiGet, apiPost, apiPatch, apiDelete, BASE_URL } from './client'
-import type { PlotCreate, PlotOut, PlotData, GateCreate, GateUpdate, GateOut } from '@/types'
+import type {
+  PlotCreate, PlotOut, PlotData,
+  GateCreate, GateUpdate, GateOut,
+  BooleanGateCreate, PopulationTreeResponse, SelectedPopulation,
+} from '@/types'
 
 export const listParameters = (sid: string) =>
   apiGet<string[]>(`/sessions/${sid}/analysis/parameters`)
@@ -22,6 +26,9 @@ export const deletePlot = (sid: string, plotId: string) =>
 export const createGate = (sid: string, plotId: string, data: GateCreate) =>
   apiPost<GateOut>(`/sessions/${sid}/analysis/plots/${plotId}/gates`, data)
 
+export const createBooleanGate = (sid: string, data: BooleanGateCreate) =>
+  apiPost<GateOut>(`/sessions/${sid}/analysis/boolean-gates`, data)
+
 export const listGates = (sid: string) =>
   apiGet<GateOut[]>(`/sessions/${sid}/analysis/gates`)
 
@@ -43,12 +50,14 @@ export const getActiveSamples = (sid: string) =>
 export const resetGates = (sid: string) =>
   apiPost<{ reactivated: number }>(`/sessions/${sid}/analysis/reset-gates`)
 
-export const getPopulationTree = (sid: string) =>
-  apiGet<GateTreeNode[]>(`/sessions/${sid}/analysis/population-tree`)
+export const selectPopulation = (sid: string, gateId: string | null) =>
+  apiPost<SelectedPopulation>(`/sessions/${sid}/analysis/select-population`, { gate_id: gateId })
 
-export interface GateTreeNode extends GateOut {
-  children: GateTreeNode[]
-}
+export const getSelectedPopulation = (sid: string) =>
+  apiGet<SelectedPopulation>(`/sessions/${sid}/analysis/selected-population`)
+
+export const getPopulationTree = (sid: string) =>
+  apiGet<PopulationTreeResponse>(`/sessions/${sid}/analysis/population-tree`)
 
 
 // ── Batch plot data ────────────────────────────────────────────────────

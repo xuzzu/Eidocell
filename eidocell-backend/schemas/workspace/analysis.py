@@ -1,5 +1,6 @@
 import math
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
@@ -22,8 +23,9 @@ class ScatterParams(BaseModel):
 
 class PlotCreate(BaseModel):
     name: str | None = None  # auto-generated if not provided
-    chart_type: str  # "histogram" or "scatter"
-    parameters: dict  # HistogramParams or ScatterParams as dict
+    chart_type: str  # "histogram", "scatter", "density", "contour"
+    parameters: dict
+    parent_gate_id: str | None = None  # restrict plot to this population
 
 
 class PlotOut(BaseModel):
@@ -31,6 +33,7 @@ class PlotOut(BaseModel):
     name: str
     chart_type: str
     parameters: dict
+    parent_gate_id: str | None = None
     created_at: datetime
     gate_count: int = 0
 
@@ -123,17 +126,11 @@ def _validate_gate_definition(gate_type: str, definition: dict, parameters: list
 
 class GateCreate(BaseModel):
     name: str | None = None
-    gate_type: str  # "rectangular", "polygon", "interval", "ellipse", "quadrant"
-    definition: dict  # depends on type:
-    # rectangular: {"x": float, "y": float, "width": float, "height": float}
-    # polygon: {"vertices": [[x, y], ...]}
-    # interval: {"min": float, "max": float}
-    # ellipse: {"cx": float, "cy": float, "rx": float, "ry": float, "angle": float}
-    # quadrant: {"x_threshold": float, "y_threshold": float}
+    gate_type: Literal["rectangular", "polygon", "interval", "ellipse", "quadrant"]
+    definition: dict
     color: str = "#FF0000"
-    parameters: list[str]  # axis names this gate operates on
-    is_active: bool = True
-    parent_gate_id: str | None = None  # for hierarchical gating
+    parameters: list[str]
+    parent_gate_id: str | None = None
 
     @model_validator(mode="after")
     def validate_definition(self):
@@ -145,20 +142,42 @@ class GateUpdate(BaseModel):
     name: str | None = None
     color: str | None = None
     definition: dict | None = None
-    is_active: bool | None = None
+    # parent_gate_id: explicit None = move to root; absent = leave unchanged.
+    # Use model_fields_set to distinguish at the service layer.
+    parent_gate_id: str | None = None
+
+
+class BooleanGateCreate(BaseModel):
+    name: str
+    operator: Literal["AND", "OR"]
+    source_gate_ids: list[str]
+    color: str = "#9333EA"
+
+    @model_validator(mode="after")
+    def validate_sources(self):
+        if len(self.source_gate_ids) != 2:
+            raise ValueError("Boolean gates require exactly 2 source gates")
+        if self.source_gate_ids[0] == self.source_gate_ids[1]:
+            raise ValueError("Boolean gate source gates must be distinct")
+        return self
+
+
+class SelectPopulationRequest(BaseModel):
+    gate_id: str | None = None
 
 
 class GateOut(BaseModel):
     id: str
-    plot_id: str
+    plot_id: str | None = None
     name: str
     gate_type: str
     definition: dict
     color: str
     parameters: list[str]
-    is_active: bool
     sample_count: int = 0
     percentage: float = 0.0
     parent_gate_id: str | None = None
+    operator: str | None = None
+    source_gate_ids: list[str] | None = None
 
     model_config = {"from_attributes": True}

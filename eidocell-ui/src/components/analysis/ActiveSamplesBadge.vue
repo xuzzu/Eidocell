@@ -9,17 +9,22 @@ const gallery = useGalleryStore()
 
 const totalSamples = computed(() => gallery.total ?? 0)
 const activeCount = computed(() => analysis.activeSamples.length)
-const hasActiveGates = computed(() => analysis.gates.some(g => g.is_active))
+const hasSelection = computed(() => analysis.selectedGateId !== null)
 const percentage = computed(() =>
   totalSamples.value > 0 ? (activeCount.value / totalSamples.value) * 100 : 100
+)
+const selectedGate = computed(() =>
+  analysis.allGates.find(g => g.id === analysis.selectedGateId) ?? null,
 )
 </script>
 
 <template>
-  <div v-if="hasActiveGates" class="p-3 bg-base-200 rounded-[2px]">
-    <div class="flex items-center justify-between">
-      <span class="text-[10px] font-bold tracking-widest uppercase text-neutral/70">Active Samples</span>
-      <span class="text-[11px] font-mono font-bold">
+  <div v-if="hasSelection" class="p-3 bg-base-200 rounded-[2px]">
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-[10px] font-bold tracking-widest uppercase text-neutral/70 truncate">
+        {{ selectedGate?.name ?? 'Active population' }}
+      </span>
+      <span class="text-[11px] font-mono font-bold shrink-0">
         {{ activeCount.toLocaleString() }} / {{ totalSamples.toLocaleString() }}
       </span>
     </div>
@@ -34,7 +39,7 @@ const percentage = computed(() =>
       @click="analysis.resetAllGates()"
     >
       <RotateCcw class="w-3 h-3 stroke-[2px]" />
-      Reset All Gates
+      Show All Events
     </button>
   </div>
 </template>

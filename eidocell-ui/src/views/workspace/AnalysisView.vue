@@ -5,9 +5,9 @@ import { useAnalysisStore } from '@/stores/analysis'
 import PlotCreator from '@/components/analysis/PlotCreator.vue'
 import PlotList from '@/components/analysis/PlotList.vue'
 import AnalysisWorkspace from '@/components/analysis/AnalysisWorkspace.vue'
-import GateList from '@/components/analysis/GateList.vue'
 import GateImageStrip from '@/components/analysis/GateImageStrip.vue'
 import PopulationTree from '@/components/analysis/PopulationTree.vue'
+import BooleanGateBuilder from '@/components/analysis/BooleanGateBuilder.vue'
 import ActiveSamplesBadge from '@/components/analysis/ActiveSamplesBadge.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { GateCreate } from '@/types'
@@ -17,7 +17,7 @@ const analysis = useAnalysisStore()
 onMounted(() => {
   analysis.fetchParameters()
   analysis.fetchPlots()
-  analysis.fetchActiveSamples()
+  analysis.refreshGatingState()
 })
 
 async function onGateCreated(plotId: string, gate: GateCreate) {
@@ -49,15 +49,13 @@ async function onGateDeleted(gateId: string) {
         <PopulationTree />
       </div>
 
-      <template v-if="analysis.selectedPlotId">
-        <div class="border-t border-base-300 pt-4">
-          <GateList />
-        </div>
+      <div class="border-t border-base-300 pt-4">
+        <BooleanGateBuilder />
+      </div>
 
-        <div class="border-t border-base-300 pt-4">
-          <GateImageStrip />
-        </div>
-      </template>
+      <div class="border-t border-base-300 pt-4">
+        <GateImageStrip />
+      </div>
 
       <div class="border-t border-base-300 pt-4">
         <ActiveSamplesBadge />

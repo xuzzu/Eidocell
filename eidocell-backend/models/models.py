@@ -35,6 +35,9 @@ class Session(Base):
     )
     scale_factor: Mapped[float] = mapped_column(Float, default=1.0)
     scale_units: Mapped[str] = mapped_column(String, default="px")
+    selected_gate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("gates.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Relationships
     samples: Mapped[list["Sample"]] = relationship(
@@ -118,15 +121,19 @@ class Plot(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    chart_type: Mapped[str] = mapped_column(String, nullable=False)  # "histogram" or "scatter"
+    chart_type: Mapped[str] = mapped_column(String, nullable=False)
     parameters: Mapped[dict] = mapped_column(JSON, nullable=False)
+    parent_gate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("gates.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
     session: Mapped["Session"] = relationship()
     gates: Mapped[list["Gate"]] = relationship(
-        back_populates="plot", cascade="all, delete-orphan"
+        back_populates="plot", cascade="all, delete-orphan",
+        foreign_keys="Gate.plot_id",
     )
 
 
@@ -155,20 +162,26 @@ class Gate(Base):
     __tablename__ = "gates"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
-    plot_id: Mapped[str] = mapped_column(ForeignKey("plots.id"), nullable=False, index=True)
+    plot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("plots.id"), nullable=True, index=True
+    )
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    gate_type: Mapped[str] = mapped_column(String, nullable=False)  # "rectangular", "polygon", "interval", "ellipse", "quadrant"
-    definition: Mapped[dict] = mapped_column(JSON, nullable=False)  # coordinates/vertices/range
+    gate_type: Mapped[str] = mapped_column(String, nullable=False)  # "rectangular" | "polygon" | "interval" | "ellipse" | "quadrant" | "boolean"
+    definition: Mapped[dict] = mapped_column(JSON, nullable=False)
     color: Mapped[str] = mapped_column(String, default="#FF0000")
-    parameters: Mapped[list] = mapped_column(JSON, nullable=False)  # axis names
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    parameters: Mapped[list] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)  # deprecated, kept for back-compat
     parent_gate_id: Mapped[str | None] = mapped_column(
         ForeignKey("gates.id"), nullable=True, index=True
     )
+    operator: Mapped[str | None] = mapped_column(String, nullable=True)  # "AND" | "OR" for boolean gates
+    source_gate_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)  # list of two gate IDs for boolean gates
 
-    plot: Mapped["Plot"] = relationship(back_populates="gates")
-    session: Mapped["Session"] = relationship()
+    plot: Mapped["Plot | None"] = relationship(
+        back_populates="gates", foreign_keys=[plot_id]
+    )
+    session: Mapped["Session"] = relationship(foreign_keys=[session_id])
     parent_gate: Mapped["Gate | None"] = relationship(
         remote_side="Gate.id", foreign_keys=[parent_gate_id]
     )

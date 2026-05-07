@@ -1,10 +1,13 @@
 export type ChartType = 'histogram' | 'scatter' | 'density' | 'contour'
-export type GateType = 'interval' | 'rectangular' | 'polygon' | 'ellipse' | 'quadrant'
+export type HierarchicalGateType = 'interval' | 'rectangular' | 'polygon' | 'ellipse' | 'quadrant'
+export type GateType = HierarchicalGateType | 'boolean' | 'root'
+export type BooleanOperator = 'AND' | 'OR'
 
 export interface PlotCreate {
   name?: string
   chart_type: ChartType
   parameters: Record<string, unknown>
+  parent_gate_id?: string | null
 }
 
 export interface PlotOut {
@@ -12,6 +15,7 @@ export interface PlotOut {
   name: string
   chart_type: ChartType
   parameters: Record<string, unknown>
+  parent_gate_id?: string | null
   created_at: string
   gate_count: number
 }
@@ -34,33 +38,53 @@ export interface PlotData {
 
 export interface GateCreate {
   name?: string
-  gate_type: GateType
+  gate_type: HierarchicalGateType
   definition: Record<string, unknown>
   color?: string
   parameters: string[]
-  is_active?: boolean
   parent_gate_id?: string | null
+}
+
+export interface BooleanGateCreate {
+  name: string
+  operator: BooleanOperator
+  source_gate_ids: [string, string]
+  color?: string
 }
 
 export interface GateUpdate {
   name?: string
   color?: string
   definition?: Record<string, unknown>
-  is_active?: boolean
+  parent_gate_id?: string | null
 }
 
 export interface GateOut {
   id: string
-  plot_id: string
+  plot_id: string | null
   name: string
   gate_type: GateType
   definition: Record<string, unknown>
   color: string
   parameters: string[]
-  is_active: boolean
   sample_count: number
   percentage: number
   parent_gate_id?: string | null
+  operator?: BooleanOperator | null
+  source_gate_ids?: string[] | null
+}
+
+export interface PopulationTreeNode extends GateOut {
+  children: PopulationTreeNode[]
+}
+
+export interface PopulationTreeResponse {
+  root: PopulationTreeNode
+  booleans: PopulationTreeNode[]
+}
+
+export interface SelectedPopulation {
+  selected_gate_id: string | null
 }
 
 export interface PlotLayout {

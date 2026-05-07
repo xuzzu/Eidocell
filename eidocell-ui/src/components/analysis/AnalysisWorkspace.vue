@@ -3,23 +3,9 @@
 import { GridLayout, GridItem } from 'vue-grid-layout-v3'
 import { useAnalysisStore } from '@/stores/analysis'
 import PlotWidget from '@/components/analysis/PlotWidget.vue'
-import type { GateCreate, PlotData, PlotLayout } from '@/types'
+import type { GateCreate, PlotLayout } from '@/types'
 
 const analysis = useAnalysisStore()
-
-/**
- * When a parent gate is selected for sub-gating, filter plot data
- * to only include points within the parent's population.
- */
-function getFilteredPlotData(plotId: string): PlotData | null {
-  const raw = analysis.plotDataCache.get(plotId) ?? null
-  if (!raw) return null
-  const parentIds = analysis.parentPopulationIds
-  if (!parentIds) return raw
-  // Filter data points to only those in the parent population
-  const filtered = raw.data.filter(p => parentIds.has(p.sample_id))
-  return { ...raw, data: filtered, total: raw.total }
-}
 
 const emit = defineEmits<{
   gateCreated: [plotId: string, gate: GateCreate]
@@ -68,10 +54,9 @@ function onRemovePlot(plotId: string) {
       <PlotWidget
         v-if="getPlot(item.i)"
         :plot="getPlot(item.i)!"
-        :plot-data="getFilteredPlotData(item.i)"
-        :gates="analysis.plotGatesCache.get(item.i) ?? []"
+        :plot-data="analysis.plotDataCache.get(item.i) ?? null"
+        :gates="analysis.gatesByPlotId.get(item.i) ?? []"
         :is-active="analysis.selectedPlotId === item.i"
-        :parent-gate-name="analysis.parentGate?.name ?? null"
         @select="analysis.selectPlot(item.i)"
         @gate-created="(g) => emit('gateCreated', item.i, g)"
         @gate-updated="(id, def) => emit('gateUpdated', id, def)"

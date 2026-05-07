@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from models.models import Sample, SampleClass, Mask, Plot, Gate, sample_clusters
+from models.models import Sample, SampleClass, Mask, Plot, Gate, Session, sample_clusters
 from schemas.workspace.analysis import _validate_gate_definition
 
 logger = logging.getLogger("eidocell.analysis")
@@ -18,7 +18,11 @@ logger = logging.getLogger("eidocell.analysis")
 # ── Plot CRUD ───────────────────────────────────────────────────────────
 
 
-def create_plot(db: DbSession, session_id: str, chart_type: str, parameters: dict, name: str | None) -> dict:
+def create_plot(
+    db: DbSession, session_id: str,
+    chart_type: str, parameters: dict, name: str | None,
+    parent_gate_id: str | None = None,
+) -> dict:
     valid_chart_types = ("histogram", "scatter", "density", "contour")
     if chart_type not in valid_chart_types:
         raise HTTPException(status_code=400, detail=f"chart_type must be one of {valid_chart_types}")
@@ -35,11 +39,21 @@ def create_plot(db: DbSession, session_id: str, chart_type: str, parameters: dic
             label = chart_type.title()
             name = f"{label}: {parameters['x_variable']} vs {parameters['y_variable']}"
 
+    if parent_gate_id is not None:
+        parent = (
+            db.query(Gate)
+            .filter(Gate.id == parent_gate_id, Gate.session_id == session_id)
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent gate not found")
+
     plot = Plot(
         session_id=session_id,
         name=name,
         chart_type=chart_type,
         parameters=parameters,
+        parent_gate_id=parent_gate_id,
     )
     db.add(plot)
     db.commit()
@@ -73,8 +87,15 @@ def delete_plot(db: DbSession, plot_id: str) -> None:
     plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if not plot:
         raise HTTPException(status_code=404, detail="Plot not found")
+    session_id = plot.session_id
+    # Cascade: every gate created on this plot, plus its hierarchical
+    # descendants, plus any boolean gate that referenced any of them.
+    for gate_id in [g.id for g in plot.gates]:
+        _delete_gate_subtree(db, gate_id)
     db.delete(plot)
     db.commit()
+    _clear_selection_if_dangling(db, session_id)
+    _update_active_samples(db, session_id)
 
 
 def _plot_to_out(plot: Plot, gate_count: int) -> dict:
@@ -83,6 +104,7 @@ def _plot_to_out(plot: Plot, gate_count: int) -> dict:
         "name": plot.name,
         "chart_type": plot.chart_type,
         "parameters": plot.parameters,
+        "parent_gate_id": plot.parent_gate_id,
         "created_at": plot.created_at,
         "gate_count": gate_count,
     }
@@ -92,15 +114,26 @@ def _plot_to_out(plot: Plot, gate_count: int) -> dict:
 
 
 def _query_plot_rows(db: DbSession, plot: Plot, axes: list[str]):
-    """Shared query for plot data: returns list of (sample, mask, class) tuples."""
-    rows = (
+    """Shared query for plot data: returns list of (sample, mask, class) tuples.
+
+    Returns ALL session samples regardless of is_active so the plot keeps a
+    stable axis range as gates are added. If the plot inherits from a parent
+    gate, results are restricted to that population.
+    """
+    query = (
         db.query(Sample, Mask, SampleClass)
         .join(Mask, Sample.id == Mask.sample_id)
         .outerjoin(SampleClass, Sample.class_id == SampleClass.id)
-        .filter(Sample.session_id == plot.session_id, Sample.is_active == True)
-        .all()
+        .filter(Sample.session_id == plot.session_id)
     )
-    return rows
+    if plot.parent_gate_id:
+        parent = db.query(Gate).filter(Gate.id == plot.parent_gate_id).first()
+        if parent:
+            parent_ids = _compute_gate_population(db, parent)
+            if not parent_ids:
+                return []
+            query = query.filter(Sample.id.in_(parent_ids))
+    return query.all()
 
 
 def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
@@ -288,17 +321,31 @@ def list_available_parameters(db: DbSession, session_id: str) -> list[str]:
 def create_gate(
     db: DbSession, session_id: str, plot_id: str,
     gate_type: str, definition: dict, parameters: list[str],
-    name: str | None, color: str, is_active: bool,
+    name: str | None, color: str,
     parent_gate_id: str | None = None,
 ) -> dict:
+    if gate_type == "boolean":
+        raise HTTPException(
+            status_code=400,
+            detail="Boolean gates must be created via /boolean-gates",
+        )
+
     plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if not plot:
         raise HTTPException(status_code=404, detail="Plot not found")
+
+    # If the plot itself inherits from a population, gates drawn on it
+    # automatically nest under that parent unless an explicit parent was given.
+    if parent_gate_id is None and plot.parent_gate_id is not None:
+        parent_gate_id = plot.parent_gate_id
 
     if parent_gate_id:
         parent = db.query(Gate).filter(Gate.id == parent_gate_id).first()
         if not parent:
             raise HTTPException(status_code=404, detail="Parent gate not found")
+        # Boolean parents are allowed: child population becomes
+        # boolean.population ∩ child.filter, which is the natural meaning when a
+        # plot inherits from a boolean and a gate is then drawn on it.
 
     if not name:
         name = f"Gate {gate_type[:4].title()}"
@@ -311,24 +358,58 @@ def create_gate(
         definition=definition,
         color=color,
         parameters=parameters,
-        is_active=is_active,
+        is_active=False,
         parent_gate_id=parent_gate_id,
     )
     db.add(gate)
     db.commit()
     db.refresh(gate)
 
-    # Compute population
     sample_ids = _compute_gate_population(db, gate)
-    total = db.query(func.count(Sample.id)).filter(
-        Sample.session_id == session_id, Sample.is_active == True
-    ).scalar()
-
-    # Update active samples if gate is active
-    if is_active:
-        _update_active_samples(db, session_id)
-
+    total = _session_total_samples(db, session_id)
     return _gate_to_out(gate, len(sample_ids), total)
+
+
+def create_boolean_gate(
+    db: DbSession, session_id: str,
+    name: str, operator: str, source_gate_ids: list[str], color: str,
+) -> dict:
+    if operator not in ("AND", "OR"):
+        raise HTTPException(status_code=400, detail="Operator must be AND or OR")
+    if len(source_gate_ids) != 2 or source_gate_ids[0] == source_gate_ids[1]:
+        raise HTTPException(
+            status_code=400,
+            detail="Boolean gates require two distinct source gates",
+        )
+
+    sources = (
+        db.query(Gate)
+        .filter(Gate.id.in_(source_gate_ids), Gate.session_id == session_id)
+        .all()
+    )
+    if len(sources) != 2:
+        raise HTTPException(status_code=404, detail="Source gate(s) not found")
+
+    gate = Gate(
+        plot_id=None,
+        session_id=session_id,
+        name=name,
+        gate_type="boolean",
+        definition={},
+        color=color,
+        parameters=[],
+        is_active=False,
+        parent_gate_id=None,
+        operator=operator,
+        source_gate_ids=list(source_gate_ids),
+    )
+    db.add(gate)
+    db.commit()
+    db.refresh(gate)
+
+    pop = _compute_gate_population(db, gate)
+    total = _session_total_samples(db, session_id)
+    return _gate_to_out(gate, len(pop), total)
 
 
 def list_gates(db: DbSession, session_id: str, plot_id: str | None = None) -> list[dict]:
@@ -337,9 +418,7 @@ def list_gates(db: DbSession, session_id: str, plot_id: str | None = None) -> li
         query = query.filter(Gate.plot_id == plot_id)
     gates = query.all()
 
-    total = db.query(func.count(Sample.id)).filter(
-        Sample.session_id == session_id, Sample.is_active == True
-    ).scalar()
+    total = _session_total_samples(db, session_id)
 
     results = []
     for g in gates:
@@ -349,7 +428,9 @@ def list_gates(db: DbSession, session_id: str, plot_id: str | None = None) -> li
 
 
 def update_gate(db: DbSession, gate_id: str, name: str | None, color: str | None,
-                definition: dict | None, is_active: bool | None) -> dict:
+                definition: dict | None,
+                parent_gate_id: str | None = None,
+                update_parent: bool = False) -> dict:
     gate = db.query(Gate).filter(Gate.id == gate_id).first()
     if not gate:
         raise HTTPException(status_code=404, detail="Gate not found")
@@ -359,26 +440,94 @@ def update_gate(db: DbSession, gate_id: str, name: str | None, color: str | None
     if color is not None:
         gate.color = color
     if definition is not None:
+        if gate.gate_type == "boolean":
+            raise HTTPException(status_code=400, detail="Boolean gates have no geometric definition")
         try:
             _validate_gate_definition(gate.gate_type, definition, gate.parameters)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         gate.definition = definition
-    if is_active is not None:
-        gate.is_active = is_active
+
+    if update_parent:
+        if gate.gate_type == "boolean":
+            raise HTTPException(status_code=400, detail="Boolean gates cannot be reparented")
+        if parent_gate_id is not None:
+            if parent_gate_id == gate.id:
+                raise HTTPException(status_code=400, detail="Gate cannot be its own parent")
+            target = db.query(Gate).filter(Gate.id == parent_gate_id).first()
+            if not target or target.session_id != gate.session_id:
+                raise HTTPException(status_code=400, detail="Invalid parent gate")
+            cursor: Gate | None = target
+            seen: set[str] = set()
+            while cursor is not None and cursor.id not in seen:
+                if cursor.id == gate.id:
+                    raise HTTPException(status_code=400, detail="Cycle detected: target is a descendant of this gate")
+                seen.add(cursor.id)
+                cursor = (
+                    db.query(Gate).filter(Gate.id == cursor.parent_gate_id).first()
+                    if cursor.parent_gate_id else None
+                )
+        gate.parent_gate_id = parent_gate_id
 
     db.commit()
     db.refresh(gate)
 
     pop = _compute_gate_population(db, gate)
-    total = db.query(func.count(Sample.id)).filter(
-        Sample.session_id == gate.session_id, Sample.is_active == True
-    ).scalar()
+    total = _session_total_samples(db, gate.session_id)
 
-    if is_active is not None:
-        _update_active_samples(db, gate.session_id)
+    # Definition or parent change can shift populations of this gate, its
+    # descendants, and any boolean depending on it. Refresh the active-sample
+    # mirror so the gallery view tracks the selected gate's new population
+    # without forcing a manual reselection.
+    _update_active_samples(db, gate.session_id)
 
     return _gate_to_out(gate, len(pop), total)
+
+
+def _delete_gate_subtree(db: DbSession, gate_id: str) -> set[str]:
+    """Delete a gate, its hierarchical descendants, and any boolean gate that
+    transitively references any of them. Returns the set of deleted gate IDs."""
+    gate = db.query(Gate).filter(Gate.id == gate_id).first()
+    if not gate:
+        return set()
+    session_id = gate.session_id
+
+    # BFS hierarchical descendants.
+    to_delete: set[str] = {gate.id}
+    frontier: list[str] = [gate.id]
+    while frontier:
+        children = (
+            db.query(Gate.id)
+            .filter(Gate.parent_gate_id.in_(frontier))
+            .all()
+        )
+        next_frontier = [cid for (cid,) in children if cid not in to_delete]
+        to_delete.update(next_frontier)
+        frontier = next_frontier
+
+    # Iterate to fixed point: any boolean gate referencing a doomed gate also dies.
+    while True:
+        booleans = (
+            db.query(Gate)
+            .filter(
+                Gate.session_id == session_id,
+                Gate.gate_type == "boolean",
+                Gate.id.notin_(to_delete),
+            )
+            .all()
+        )
+        added = False
+        for b in booleans:
+            sources = b.source_gate_ids or []
+            if any(s in to_delete for s in sources):
+                to_delete.add(b.id)
+                added = True
+        if not added:
+            break
+
+    db.query(Gate).filter(Gate.id.in_(to_delete)).delete(synchronize_session="fetch")
+    db.commit()
+    return to_delete
 
 
 def delete_gate(db: DbSession, gate_id: str) -> None:
@@ -386,8 +535,8 @@ def delete_gate(db: DbSession, gate_id: str) -> None:
     if not gate:
         raise HTTPException(status_code=404, detail="Gate not found")
     session_id = gate.session_id
-    db.delete(gate)
-    db.commit()
+    _delete_gate_subtree(db, gate_id)
+    _clear_selection_if_dangling(db, session_id)
     _update_active_samples(db, session_id)
 
 
@@ -408,51 +557,73 @@ def _gate_to_out(gate: Gate, sample_count: int, total: int) -> dict:
         "definition": gate.definition,
         "color": gate.color,
         "parameters": gate.parameters,
-        "is_active": gate.is_active,
         "sample_count": sample_count,
         "percentage": (sample_count / total * 100) if total > 0 else 0,
         "parent_gate_id": gate.parent_gate_id,
+        "operator": gate.operator,
+        "source_gate_ids": gate.source_gate_ids,
     }
+
+
+def _session_total_samples(db: DbSession, session_id: str) -> int:
+    return db.query(func.count(Sample.id)).filter(Sample.session_id == session_id).scalar() or 0
 
 
 # ── Gate population computation ─────────────────────────────────────────
 
 
-def _compute_gate_population(db: DbSession, gate: Gate) -> list[str]:
-    """Compute which sample IDs fall within a gate based on mask attributes.
+def _compute_gate_population(
+    db: DbSession, gate: Gate, _seen: set[str] | None = None
+) -> list[str]:
+    """Compute which sample IDs fall within a gate.
 
-    If the gate has a parent, only samples within the parent population are considered.
+    Hierarchical gate: parent population (recursive) intersected with this gate's
+    geometric filter. Boolean gate: AND/OR of two source gates' populations.
+    `_seen` tracks gates currently being evaluated up-stack to break cycles.
     """
+    seen = (_seen or set()) | {gate.id}
+
+    if gate.gate_type == "boolean":
+        sources = gate.source_gate_ids or []
+        if len(sources) != 2 or any(s in seen for s in sources):
+            return []
+        a = db.query(Gate).filter(Gate.id == sources[0]).first()
+        b = db.query(Gate).filter(Gate.id == sources[1]).first()
+        if not a or not b:
+            return []
+        pop_a = set(_compute_gate_population(db, a, seen))
+        pop_b = set(_compute_gate_population(db, b, seen))
+        if gate.operator == "AND":
+            return list(pop_a & pop_b)
+        return list(pop_a | pop_b)
+
     axes = gate.parameters
     gate_type = gate.gate_type
     defn = gate.definition
 
-    # If hierarchical: restrict to parent population
-    parent_ids = None
-    if gate.parent_gate_id:
+    parent_ids: set[str] | None = None
+    if gate.parent_gate_id and gate.parent_gate_id not in seen:
         parent_gate = db.query(Gate).filter(Gate.id == gate.parent_gate_id).first()
         if parent_gate:
-            parent_ids = set(_compute_gate_population(db, parent_gate))
+            parent_ids = set(_compute_gate_population(db, parent_gate, seen))
+            if not parent_ids:
+                return []
 
-    # Get all samples with masks in this session
+    # Population evaluation must NOT depend on Sample.is_active — that field
+    # mirrors the currently-selected population, so filtering by it would make
+    # every other gate's count shrink to "samples also in the selection."
     query = (
         db.query(Sample.id, Mask.attributes)
         .join(Mask, Sample.id == Mask.sample_id)
-        .filter(Sample.session_id == gate.session_id, Sample.is_active == True)
+        .filter(Sample.session_id == gate.session_id)
     )
-    # If parent gate, only check parent's samples
     if parent_ids is not None:
-        if len(parent_ids) == 0:
-            return []
         query = query.filter(Sample.id.in_(parent_ids))
 
-    rows = query.all()
-
-    matching_ids = []
-    for sample_id, attrs in rows:
+    matching_ids: list[str] = []
+    for sample_id, attrs in query.all():
         if not attrs:
             continue
-        # Extract axis values
         vals = []
         skip = False
         for axis in axes:
@@ -521,40 +692,76 @@ def _point_in_polygon(x: float, y: float, vertices: list[list[float]]) -> bool:
 # ── Active samples filtering ───────────────────────────────────────────
 
 
+def _clear_selection_if_dangling(db: DbSession, session_id: str) -> None:
+    """Null out Session.selected_gate_id if the referenced gate no longer exists."""
+    sess = db.query(Session).filter(Session.id == session_id).first()
+    if not sess or sess.selected_gate_id is None:
+        return
+    exists = db.query(Gate.id).filter(Gate.id == sess.selected_gate_id).first()
+    if not exists:
+        sess.selected_gate_id = None
+        db.commit()
+
+
 def _update_active_samples(db: DbSession, session_id: str) -> None:
-    """Update is_active on samples based on active gates (OR union logic).
+    """Set Sample.is_active to mirror the selected gate's population, or all
+    samples active when no gate is selected."""
+    sess = db.query(Session).filter(Session.id == session_id).first()
+    if not sess:
+        return
 
-    If no active gates exist, all samples are active.
-    If active gates exist, only samples in ANY gate are active.
-    """
-    active_gates = (
-        db.query(Gate)
-        .filter(Gate.session_id == session_id, Gate.is_active == True)
-        .all()
-    )
-
-    if not active_gates:
-        # No gates — all samples active
+    if sess.selected_gate_id is None:
         db.query(Sample).filter(Sample.session_id == session_id).update({"is_active": True})
         db.commit()
         return
 
-    # Compute union of all gate populations
-    active_ids = set()
-    for gate in active_gates:
-        pop = _compute_gate_population(db, gate)
-        active_ids.update(pop)
+    gate = db.query(Gate).filter(Gate.id == sess.selected_gate_id).first()
+    if not gate:
+        sess.selected_gate_id = None
+        db.query(Sample).filter(Sample.session_id == session_id).update({"is_active": True})
+        db.commit()
+        return
 
-    # Update is_active: True for those in gates, False for others
-    db.query(Sample).filter(
-        Sample.session_id == session_id, Sample.id.in_(active_ids)
-    ).update({"is_active": True}, synchronize_session="fetch")
-
-    db.query(Sample).filter(
-        Sample.session_id == session_id, ~Sample.id.in_(active_ids)
-    ).update({"is_active": False}, synchronize_session="fetch")
-
+    active_ids = set(_compute_gate_population(db, gate))
+    if active_ids:
+        db.query(Sample).filter(
+            Sample.session_id == session_id, Sample.id.in_(active_ids)
+        ).update({"is_active": True}, synchronize_session="fetch")
+        db.query(Sample).filter(
+            Sample.session_id == session_id, ~Sample.id.in_(active_ids)
+        ).update({"is_active": False}, synchronize_session="fetch")
+    else:
+        db.query(Sample).filter(Sample.session_id == session_id).update({"is_active": False})
     db.commit()
+
+
+def select_population(db: DbSession, session_id: str, gate_id: str | None) -> dict:
+    """Set the session's selected gate (or clear with None) and refresh
+    Sample.is_active to mirror its population."""
+    sess = db.query(Session).filter(Session.id == session_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if gate_id is not None:
+        gate = (
+            db.query(Gate)
+            .filter(Gate.id == gate_id, Gate.session_id == session_id)
+            .first()
+        )
+        if not gate:
+            raise HTTPException(status_code=404, detail="Gate not found")
+
+    sess.selected_gate_id = gate_id
+    db.commit()
+    _update_active_samples(db, session_id)
+    return {"selected_gate_id": gate_id}
+
+
+def get_selected_population(db: DbSession, session_id: str) -> dict:
+    sess = db.query(Session).filter(Session.id == session_id).first()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"selected_gate_id": sess.selected_gate_id}
 
 
 def get_active_sample_ids(db: DbSession, session_id: str) -> list[str]:
@@ -568,54 +775,68 @@ def get_active_sample_ids(db: DbSession, session_id: str) -> list[str]:
 
 
 def reset_active_samples(db: DbSession, session_id: str) -> int:
-    """Deactivate all gates and reactivate all samples."""
-    db.query(Gate).filter(Gate.session_id == session_id).update({"is_active": False})
-    updated = db.query(Sample).filter(Sample.session_id == session_id).update({"is_active": True})
-    db.commit()
-    return updated
+    """Clear the selected population so all samples become active again."""
+    select_population(db, session_id, None)
+    return (
+        db.query(func.count(Sample.id))
+        .filter(Sample.session_id == session_id, Sample.is_active == True)
+        .scalar()
+        or 0
+    )
 
 
 # ── Population tree ──────────���────────────────────────────────────────
 
 
-def get_population_tree(db: DbSession, session_id: str) -> list[dict]:
-    """Return all gates for a session arranged as a tree.
+def get_population_tree(db: DbSession, session_id: str) -> dict:
+    """Return the full population tree for a session.
 
-    Each node: {id, name, gate_type, color, is_active, plot_id, sample_count,
-                percentage, parent_gate_id, children: [...]}
+    Shape: { root: <synthetic 'All Events' node with children>, booleans: [...] }
+    Hierarchical gates nest under root; boolean gates are returned in a flat list.
     """
     all_gates = db.query(Gate).filter(Gate.session_id == session_id).all()
-    if not all_gates:
-        return []
+    total = _session_total_samples(db, session_id)
 
-    total = db.query(func.count(Sample.id)).filter(
-        Sample.session_id == session_id, Sample.is_active == True
-    ).scalar()
-
-    # Compute population for each gate
-    gate_pops = {}
+    gate_pops: dict[str, int] = {}
     for g in all_gates:
-        pop = _compute_gate_population(db, g)
-        gate_pops[g.id] = len(pop)
+        gate_pops[g.id] = len(_compute_gate_population(db, g))
 
-    # Build tree
-    gate_map = {}
+    gate_map: dict[str, dict] = {}
     for g in all_gates:
         node = _gate_to_out(g, gate_pops[g.id], total)
         node["children"] = []
         gate_map[g.id] = node
 
-    roots = []
+    booleans: list[dict] = []
+    hierarchical_roots: list[dict] = []
     for g in all_gates:
         node = gate_map[g.id]
+        if g.gate_type == "boolean":
+            booleans.append(node)
+            continue
         if g.parent_gate_id and g.parent_gate_id in gate_map:
             parent_node = gate_map[g.parent_gate_id]
-            # Percentage relative to parent
             parent_count = gate_pops.get(g.parent_gate_id, 0)
             if parent_count > 0:
                 node["percentage"] = (gate_pops[g.id] / parent_count) * 100
             parent_node["children"].append(node)
         else:
-            roots.append(node)
+            hierarchical_roots.append(node)
 
-    return roots
+    root = {
+        "id": "__root__",
+        "plot_id": None,
+        "name": "All Events",
+        "gate_type": "root",
+        "definition": {},
+        "color": "#475569",
+        "parameters": [],
+        "sample_count": total,
+        "percentage": 100.0 if total > 0 else 0.0,
+        "parent_gate_id": None,
+        "operator": None,
+        "source_gate_ids": None,
+        "children": hierarchical_roots,
+    }
+
+    return {"root": root, "booleans": booleans}

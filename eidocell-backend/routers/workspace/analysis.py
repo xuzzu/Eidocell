@@ -9,6 +9,7 @@ from db.session import get_db
 from schemas.workspace.analysis import (
     PlotCreate, PlotOut, PlotData,
     GateCreate, GateUpdate, GateOut,
+    BooleanGateCreate, SelectPopulationRequest,
 )
 from services.workspace import analysis_service
 
@@ -29,7 +30,10 @@ def list_available_parameters(session_id: str, db: DbSession = Depends(get_db)):
 
 @router.post("/plots", response_model=PlotOut, status_code=201)
 def create_plot(session_id: str, data: PlotCreate, db: DbSession = Depends(get_db)):
-    return analysis_service.create_plot(db, session_id, data.chart_type, data.parameters, data.name)
+    return analysis_service.create_plot(
+        db, session_id, data.chart_type, data.parameters, data.name,
+        parent_gate_id=data.parent_gate_id,
+    )
 
 
 @router.get("/plots", response_model=list[PlotOut])
@@ -108,8 +112,18 @@ def create_gate(session_id: str, plot_id: str, data: GateCreate, db: DbSession =
     return analysis_service.create_gate(
         db, session_id, plot_id,
         data.gate_type, data.definition, data.parameters,
-        data.name, data.color, data.is_active,
+        data.name, data.color,
         parent_gate_id=data.parent_gate_id,
+    )
+
+
+@router.post("/boolean-gates", response_model=GateOut, status_code=201)
+def create_boolean_gate(
+    session_id: str, data: BooleanGateCreate, db: DbSession = Depends(get_db)
+):
+    return analysis_service.create_boolean_gate(
+        db, session_id,
+        data.name, data.operator, data.source_gate_ids, data.color,
     )
 
 
@@ -126,7 +140,11 @@ def list_plot_gates(session_id: str, plot_id: str, db: DbSession = Depends(get_d
 
 @router.patch("/gates/{gate_id}", response_model=GateOut)
 def update_gate(session_id: str, gate_id: str, data: GateUpdate, db: DbSession = Depends(get_db)):
-    return analysis_service.update_gate(db, gate_id, data.name, data.color, data.definition, data.is_active)
+    return analysis_service.update_gate(
+        db, gate_id, data.name, data.color, data.definition,
+        parent_gate_id=data.parent_gate_id,
+        update_parent="parent_gate_id" in data.model_fields_set,
+    )
 
 
 @router.delete("/gates/{gate_id}", status_code=204)
@@ -150,9 +168,21 @@ def get_active_samples(session_id: str, db: DbSession = Depends(get_db)):
 
 @router.post("/reset-gates")
 def reset_gates(session_id: str, db: DbSession = Depends(get_db)):
-    """Deactivate all gates and reactivate all samples."""
+    """Clear the selected population so all samples become active again."""
     count = analysis_service.reset_active_samples(db, session_id)
     return {"reactivated": count}
+
+
+@router.post("/select-population")
+def select_population(
+    session_id: str, data: SelectPopulationRequest, db: DbSession = Depends(get_db)
+):
+    return analysis_service.select_population(db, session_id, data.gate_id)
+
+
+@router.get("/selected-population")
+def get_selected_population(session_id: str, db: DbSession = Depends(get_db)):
+    return analysis_service.get_selected_population(db, session_id)
 
 
 # ── Population tree ─────────────────────────────────────────────────────

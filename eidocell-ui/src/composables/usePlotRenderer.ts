@@ -42,7 +42,6 @@ export function usePlotRenderer(options: PlotRendererOptions) {
   // Reactive state
   const activeTool = ref<string | null>(null)
   const isDrawing = ref(false)
-  const isZoomed = ref(false)
   const drawPreviewColor = ref('#E53E3E')
 
   // Internal refs
@@ -54,6 +53,12 @@ export function usePlotRenderer(options: PlotRendererOptions) {
   let width = 0
   let height = 0
   let resizeObserver: ResizeObserver | null = null
+
+  // Once domains are computed from the first non-empty data they stay frozen.
+  // Why: backend filters out samples outside active gates, so re-deriving the
+  // domain after each gate would shrink the visible region around the gate.
+  let xDomainLocked = false
+  let yDomainLocked = false
 
   // Gate drawing callbacks
   let onGateDrawn: ((e: GateDrawEvent) => void) | null = null
@@ -152,6 +157,8 @@ export function usePlotRenderer(options: PlotRendererOptions) {
     drawStart = null
     drawingShape = null
     polygonVertices = []
+    xDomainLocked = false
+    yDomainLocked = false
   }
 
   // ── Resize ────────────────────────────────────────────────────────────
@@ -174,27 +181,43 @@ export function usePlotRenderer(options: PlotRendererOptions) {
 
     const plotW = width - MARGIN.left - MARGIN.right
     const plotH = height - MARGIN.top - MARGIN.bottom
+    const xRange: [number, number] = [MARGIN.left, MARGIN.left + plotW]
+    const yRange: [number, number] = [MARGIN.top + plotH, MARGIN.top]
+
+    // If domains are already locked, only refresh ranges (resize case).
+    if (xDomainLocked) {
+      xScale = xScale.copy().range(xRange)
+    }
+    if (yDomainLocked && chartType.value !== 'histogram') {
+      yScale = yScale.copy().range(yRange)
+    }
+    if (xDomainLocked && (yDomainLocked || chartType.value === 'histogram')) {
+      // Histogram y-domain is recomputed per-render in renderHistogram, so we
+      // only need to ensure its range is current.
+      if (chartType.value === 'histogram') {
+        yScale = yScale.copy().range(yRange)
+      }
+      return
+    }
 
     const xVar = data.parameters.x_variable as string
     const yVar = data.parameters.y_variable as string | undefined
 
-    const xVals = data.data.map(p => p.values[xVar]).filter(v => v != null)
-
-    if (xVals.length === 0) return
-
-    const xMin = d3.min(xVals)!
-    const xMax = d3.max(xVals)!
-    const xPad = (xMax - xMin) * 0.02 || 1
-
-    xScale = d3.scaleLinear()
-      .domain([xMin - xPad, xMax + xPad])
-      .range([MARGIN.left, MARGIN.left + plotW])
+    if (!xDomainLocked) {
+      const xVals = data.data.map(p => p.values[xVar]).filter(v => v != null)
+      if (xVals.length === 0) return
+      const xMin = d3.min(xVals)!
+      const xMax = d3.max(xVals)!
+      const xPad = (xMax - xMin) * 0.02 || 1
+      xScale = d3.scaleLinear()
+        .domain([xMin - xPad, xMax + xPad])
+        .range(xRange)
+      xDomainLocked = true
+    }
 
     if (chartType.value === 'histogram') {
-      // Y scale based on bin counts — set after binning
-      yScale = d3.scaleLinear()
-        .range([MARGIN.top + plotH, MARGIN.top])
-    } else {
+      yScale = d3.scaleLinear().range(yRange)
+    } else if (!yDomainLocked) {
       const yVals = data.data.map(p => p.values[yVar!]).filter(v => v != null)
       if (yVals.length === 0) return
       const yMin = d3.min(yVals)!
@@ -202,7 +225,8 @@ export function usePlotRenderer(options: PlotRendererOptions) {
       const yPad = (yMax - yMin) * 0.02 || 1
       yScale = d3.scaleLinear()
         .domain([yMin - yPad, yMax + yPad])
-        .range([MARGIN.top + plotH, MARGIN.top])
+        .range(yRange)
+      yDomainLocked = true
     }
   }
 
@@ -314,62 +338,6 @@ export function usePlotRenderer(options: PlotRendererOptions) {
 
     dataContainer!.addChild(gNormal)
     dataContainer!.addChild(gHighlight)
-  }
-
-  // ── Zoom Controls ─────────────────────────────────────────────────────
-
-  function zoomToGate(gate: GateOut) {
-    const plotW = width - MARGIN.left - MARGIN.right
-    const plotH = height - MARGIN.top - MARGIN.bottom
-    let xMin: number, xMax: number, yMin: number, yMax: number
-
-    if (gate.gate_type === 'rectangular') {
-      const d = gate.definition as { x: number; y: number; width: number; height: number }
-      xMin = d.x; xMax = d.x + d.width; yMin = d.y; yMax = d.y + d.height
-    } else if (gate.gate_type === 'interval') {
-      const d = gate.definition as { min: number; max: number }
-      xMin = d.min; xMax = d.max
-      yMin = yScale.domain()[0]; yMax = yScale.domain()[1]
-    } else if (gate.gate_type === 'polygon') {
-      const v = gate.definition.vertices as Array<[number, number]>
-      xMin = Math.min(...v.map(p => p[0])); xMax = Math.max(...v.map(p => p[0]))
-      yMin = Math.min(...v.map(p => p[1])); yMax = Math.max(...v.map(p => p[1]))
-    } else if (gate.gate_type === 'ellipse') {
-      const d = gate.definition as { cx: number; cy: number; rx: number; ry: number }
-      xMin = d.cx - d.rx; xMax = d.cx + d.rx; yMin = d.cy - d.ry; yMax = d.cy + d.ry
-    } else if (gate.gate_type === 'quadrant') {
-      // Quadrant: no meaningful zoom target
-      return
-    } else {
-      return
-    }
-
-    // Add 10% padding
-    const xPad = (xMax - xMin) * 0.1 || 1
-    const yPad = (yMax - yMin) * 0.1 || 1
-
-    xScale = d3.scaleLinear()
-      .domain([xMin - xPad, xMax + xPad])
-      .range([MARGIN.left, MARGIN.left + plotW])
-
-    if (chartType.value !== 'histogram') {
-      yScale = d3.scaleLinear()
-        .domain([yMin - yPad, yMax + yPad])
-        .range([MARGIN.top + plotH, MARGIN.top])
-    }
-
-    isZoomed.value = true
-    renderData()
-    renderAxes()
-    renderGates()
-  }
-
-  function resetView() {
-    updateScales()
-    isZoomed.value = false
-    renderData()
-    renderAxes()
-    renderGates()
   }
 
   // ── Density Heatmap (PixiJS) ───────────────────────────────────────────
@@ -737,12 +705,32 @@ export function usePlotRenderer(options: PlotRendererOptions) {
       const prx = Math.abs(xScale(cx + rx) - pcx)
       const pry = Math.abs(yScale(cy + ry) - pcy)
 
-      g.append('ellipse')
+      const ellipse = g.append('ellipse')
         .attr('cx', pcx).attr('cy', pcy)
         .attr('rx', prx).attr('ry', pry)
         .attr('fill', color).attr('fill-opacity', 0.12)
         .attr('stroke', color).attr('stroke-opacity', 0.7)
         .attr('stroke-width', 1.5)
+        .attr('cursor', 'move')
+
+      setupEllipseDrag(ellipse, gate)
+
+      // Radius handles: right (rx) and top (ry)
+      g.append('rect')
+        .attr('x', pcx + prx - 3).attr('y', pcy - 3)
+        .attr('width', 6).attr('height', 6)
+        .attr('fill', color).attr('fill-opacity', 0.9)
+        .attr('stroke', '#fff').attr('stroke-width', 0.5)
+        .attr('cursor', 'ew-resize')
+        .call(setupEllipseRadiusDrag(gate, 'rx'))
+
+      g.append('rect')
+        .attr('x', pcx - 3).attr('y', pcy - pry - 3)
+        .attr('width', 6).attr('height', 6)
+        .attr('fill', color).attr('fill-opacity', 0.9)
+        .attr('stroke', '#fff').attr('stroke-width', 0.5)
+        .attr('cursor', 'ns-resize')
+        .call(setupEllipseRadiusDrag(gate, 'ry'))
     } else if (gate.gate_type === 'quadrant') {
       const { x_threshold, y_threshold } = gate.definition as {
         x_threshold: number; y_threshold: number
@@ -892,6 +880,71 @@ export function usePlotRenderer(options: PlotRendererOptions) {
     }
   }
 
+  function setupEllipseDrag(
+    selection: d3.Selection<SVGEllipseElement, unknown, null, undefined>,
+    gate: GateOut,
+  ) {
+    const drag = d3.drag<SVGEllipseElement, unknown>()
+      .on('start', function () {
+        d3.select(this).attr('stroke-opacity', 1)
+      })
+      .on('drag', function (event) {
+        const el = d3.select(this)
+        const newCx = parseFloat(el.attr('cx')) + event.dx
+        const newCy = parseFloat(el.attr('cy')) + event.dy
+        el.attr('cx', newCx).attr('cy', newCy)
+      })
+      .on('end', function () {
+        d3.select(this).attr('stroke-opacity', 0.7)
+        const el = d3.select(this)
+        const dataCx = xScale.invert(parseFloat(el.attr('cx')))
+        const dataCy = yScale.invert(parseFloat(el.attr('cy')))
+        const def = gate.definition as { rx: number; ry: number; angle?: number }
+        emitGateEdit(gate.id, {
+          cx: dataCx, cy: dataCy,
+          rx: def.rx, ry: def.ry, angle: def.angle ?? 0,
+        })
+      })
+    selection.call(drag)
+  }
+
+  function setupEllipseRadiusDrag(gate: GateOut, axis: 'rx' | 'ry') {
+    return function (selection: d3.Selection<SVGRectElement, unknown, null, undefined>) {
+      const drag = d3.drag<SVGRectElement, unknown>()
+        .on('drag', function (event) {
+          const ellipseEl = d3.select(this.parentNode as SVGGElement).select<SVGEllipseElement>('ellipse')
+          if (axis === 'rx') {
+            const newRx = Math.max(2, parseFloat(ellipseEl.attr('rx')) + event.dx)
+            ellipseEl.attr('rx', newRx)
+            const handle = d3.select(this)
+            handle.attr('x', parseFloat(ellipseEl.attr('cx')) + newRx - 3)
+          } else {
+            const newRy = Math.max(2, parseFloat(ellipseEl.attr('ry')) - event.dy)
+            ellipseEl.attr('ry', newRy)
+            const handle = d3.select(this)
+            handle.attr('y', parseFloat(ellipseEl.attr('cy')) - newRy - 3)
+          }
+        })
+        .on('end', function () {
+          const ellipseEl = d3.select(this.parentNode as SVGGElement).select<SVGEllipseElement>('ellipse')
+          const pcx = parseFloat(ellipseEl.attr('cx'))
+          const pcy = parseFloat(ellipseEl.attr('cy'))
+          const prx = parseFloat(ellipseEl.attr('rx'))
+          const pry = parseFloat(ellipseEl.attr('ry'))
+          const dataCx = xScale.invert(pcx)
+          const dataCy = yScale.invert(pcy)
+          const dataRx = Math.abs(xScale.invert(pcx + prx) - dataCx)
+          const dataRy = Math.abs(yScale.invert(pcy - pry) - dataCy)
+          const def = gate.definition as { angle?: number }
+          emitGateEdit(gate.id, {
+            cx: dataCx, cy: dataCy,
+            rx: dataRx, ry: dataRy, angle: def.angle ?? 0,
+          })
+        })
+      selection.call(drag)
+    }
+  }
+
   function setupPolygonVertexDrag(gate: GateOut, vertexIndex: number) {
     return function (selection: d3.Selection<SVGCircleElement, unknown, null, undefined>) {
       const drag = d3.drag<SVGCircleElement, unknown>()
@@ -1033,13 +1086,26 @@ export function usePlotRenderer(options: PlotRendererOptions) {
         drawStart = null
       })
 
-    // Polygon: click to add vertex, dblclick to close
+    // Polygon: click to add a vertex; click near the first vertex (when 3+
+    // verts already exist) OR double-click anywhere to close. The first-vertex
+    // close gives users an obvious target instead of needing dblclick precision.
+    const FIRST_VERTEX_CLOSE_RADIUS = 10
     svg
       .on('click.polygon', function (event: MouseEvent) {
         if (activeTool.value !== 'polygon') return
         const [mx, my] = d3.pointer(event)
         if (mx < MARGIN.left || mx > width - MARGIN.right ||
             my < MARGIN.top || my > height - MARGIN.bottom) return
+
+        if (polygonVertices.length >= 3) {
+          const [fx, fy] = polygonVertices[0]
+          const dx = mx - fx
+          const dy = my - fy
+          if (dx * dx + dy * dy <= FIRST_VERTEX_CLOSE_RADIUS * FIRST_VERTEX_CLOSE_RADIUS) {
+            finalizePolygon(drawLayer)
+            return
+          }
+        }
 
         polygonVertices.push([mx, my])
         redrawPolygonPreview(drawLayer)
@@ -1048,24 +1114,7 @@ export function usePlotRenderer(options: PlotRendererOptions) {
         if (activeTool.value !== 'polygon' || polygonVertices.length < 3) return
         event.preventDefault()
         event.stopPropagation()
-
-        const data = plotData.value
-        if (!data) return
-
-        const xVar = data.parameters.x_variable as string
-        const yVar = data.parameters.y_variable as string
-        const dataVerts = polygonVertices.map(([px, py]) => [
-          xScale.invert(px), yScale.invert(py),
-        ])
-
-        emitGateDraw({
-          gateType: 'polygon',
-          definition: { vertices: dataVerts },
-          parameters: [xVar, yVar],
-        })
-
-        polygonVertices = []
-        drawLayer.selectAll('*').remove()
+        finalizePolygon(drawLayer)
       })
 
     // Quadrant: single click sets crosshair
@@ -1099,8 +1148,8 @@ export function usePlotRenderer(options: PlotRendererOptions) {
     if (polygonVertices.length === 0) return
 
     const pc = drawPreviewColor.value
+    const closeable = polygonVertices.length >= 3
 
-    // Draw edges
     if (polygonVertices.length > 1) {
       const lineData = polygonVertices.map(([x, y]) => `${x},${y}`).join(' ')
       layer.append('polyline')
@@ -1111,14 +1160,35 @@ export function usePlotRenderer(options: PlotRendererOptions) {
         .attr('stroke-dasharray', '4,3')
     }
 
-    // Draw vertices
-    for (const [vx, vy] of polygonVertices) {
+    polygonVertices.forEach(([vx, vy], i) => {
+      const isFirst = i === 0
+      const r = isFirst && closeable ? 6 : 4
       layer.append('circle')
         .attr('cx', vx).attr('cy', vy)
-        .attr('r', 4)
-        .attr('fill', pc).attr('fill-opacity', 0.8)
-        .attr('stroke', '#fff').attr('stroke-width', 0.5)
-    }
+        .attr('r', r)
+        .attr('fill', pc).attr('fill-opacity', isFirst && closeable ? 1 : 0.8)
+        .attr('stroke', '#fff').attr('stroke-width', isFirst && closeable ? 1.5 : 0.5)
+    })
+  }
+
+  function finalizePolygon(
+    layer: d3.Selection<SVGGElement, unknown, null, undefined>,
+  ) {
+    if (polygonVertices.length < 3) return
+    const data = plotData.value
+    if (!data) return
+    const xVar = data.parameters.x_variable as string
+    const yVar = data.parameters.y_variable as string
+    const dataVerts = polygonVertices.map(([px, py]) => [
+      xScale.invert(px), yScale.invert(py),
+    ])
+    emitGateDraw({
+      gateType: 'polygon',
+      definition: { vertices: dataVerts },
+      parameters: [xVar, yVar],
+    })
+    polygonVertices = []
+    layer.selectAll('*').remove()
   }
 
   // ── Event Emitters ────────────────────────────────────────────────────
@@ -1136,6 +1206,12 @@ export function usePlotRenderer(options: PlotRendererOptions) {
 
   watch(plotData, () => {
     if (!pixi) return
+    // Plot data shifts when an inherited plot's parent gate changes — its
+    // sample subset can shrink/grow. Drop the locked domain so axes follow the
+    // new range. Non-inherited plots only fire this watcher on initial load,
+    // where unlocked → locked is the same code path.
+    xDomainLocked = false
+    yDomainLocked = false
     updateScales()
     renderData()
     renderAxes()
@@ -1168,12 +1244,9 @@ export function usePlotRenderer(options: PlotRendererOptions) {
   return {
     activeTool,
     isDrawing,
-    isZoomed,
     drawPreviewColor,
     init,
     destroy,
-    zoomToGate,
-    resetView,
     setOnGateDrawn(cb: (e: GateDrawEvent) => void) { onGateDrawn = cb },
     setOnGateEdited(cb: (e: GateEditEvent) => void) { onGateEdited = cb },
     refresh() {

@@ -17,8 +17,13 @@ const chartType = ref<ChartType>('histogram')
 const xVariable = ref('')
 const yVariable = ref('')
 const numBins = ref(30)
+const parentGateId = ref<string>('')
 
 const needsY = computed(() => chartType.value !== 'histogram')
+
+// Hierarchical + boolean gates can act as a parent population. Boolean gates
+// resolve to a sample set just like hierarchical ones.
+const parentCandidates = computed(() => analysis.allGates)
 
 const canCreate = computed(() => {
   if (!xVariable.value) return false
@@ -33,7 +38,11 @@ async function create() {
   } else {
     params.y_variable = yVariable.value
   }
-  await analysis.createPlot({ chart_type: chartType.value, parameters: params })
+  await analysis.createPlot({
+    chart_type: chartType.value,
+    parameters: params,
+    parent_gate_id: parentGateId.value || null,
+  })
 }
 </script>
 
@@ -79,6 +88,20 @@ async function create() {
       >
         <option value="">Select parameter...</option>
         <option v-for="p in analysis.parameters" :key="p" :value="p">{{ p }}</option>
+      </select>
+    </div>
+
+    <!-- Inherit population (optional) -->
+    <div class="form-control">
+      <label class="label pb-2">
+        <span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Inherit From</span>
+      </label>
+      <select
+        v-model="parentGateId"
+        class="select select-bordered rounded-[2px] w-full font-mono text-xs focus:outline-neutral"
+      >
+        <option value="">All Events</option>
+        <option v-for="g in parentCandidates" :key="g.id" :value="g.id">{{ g.name }}</option>
       </select>
     </div>
 

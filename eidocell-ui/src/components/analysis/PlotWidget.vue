@@ -1,22 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, toRef } from 'vue'
-import { Square, Pentagon, GripHorizontal, Circle, Crosshair, ArrowLeftRight, X, ZoomIn, Maximize2 } from 'lucide-vue-next'
+import { Square, Pentagon, GripHorizontal, Circle, Crosshair, ArrowLeftRight, X, Filter } from 'lucide-vue-next'
 import { usePlotRenderer, type GateDrawEvent, type GateEditEvent } from '@/composables/usePlotRenderer'
+import { nextGateColor } from '@/utils/gateColors'
+import { useAnalysisStore } from '@/stores/analysis'
 import type { PlotOut, PlotData, GateOut, ChartType, GateCreate } from '@/types'
 
-// ── Gate color palette ─────────────────────────────────────────────────
-const GATE_COLORS = [
-  '#E53E3E', '#DD6B20', '#D69E2E', '#38A169',
-  '#319795', '#3182CE', '#5A67D8', '#805AD5',
-  '#D53F8C', '#E53E3E', '#00B5D8', '#ED64A6',
-] as const
-
-let _colorIndex = 0
-function nextGateColor(): string {
-  const color = GATE_COLORS[_colorIndex % GATE_COLORS.length]
-  _colorIndex++
-  return color
-}
+const analysis = useAnalysisStore()
 
 const props = defineProps<{
   plot: PlotOut
@@ -24,7 +14,6 @@ const props = defineProps<{
   gates: GateOut[]
   isActive: boolean
   highlightedSampleIds?: Set<string> | null
-  parentGateName?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -49,17 +38,14 @@ const renderer = usePlotRenderer({
 let pendingColor = nextGateColor()
 renderer.drawPreviewColor.value = pendingColor
 
-// Wire up gate callbacks
 renderer.setOnGateDrawn((e: GateDrawEvent) => {
   const gate: GateCreate = {
     gate_type: e.gateType as GateCreate['gate_type'],
     definition: e.definition,
     parameters: e.parameters,
     color: pendingColor,
-    is_active: true,
   }
   emit('gateCreated', gate)
-  // Advance to next color for next gate
   pendingColor = nextGateColor()
   renderer.drawPreviewColor.value = pendingColor
 })
@@ -99,6 +85,12 @@ const gateTools = computed(() => {
 })
 
 const pointCount = computed(() => props.plotData?.data.length ?? 0)
+
+const parentPopulationName = computed(() => {
+  const pid = props.plot.parent_gate_id
+  if (!pid) return null
+  return analysis.allGates.find(g => g.id === pid)?.name ?? null
+})
 </script>
 
 <template>
@@ -111,6 +103,14 @@ const pointCount = computed(() => props.plotData?.data.length ?? 0)
     <div class="widget-drag-handle h-8 flex items-center gap-1 px-2 border-b border-base-300 shrink-0 cursor-grab select-none bg-base-100">
       <GripHorizontal class="w-3 h-3 text-neutral/25 shrink-0" />
       <span class="text-[9px] font-mono font-bold text-neutral/50 truncate ml-1">{{ plot.name }}</span>
+      <span
+        v-if="parentPopulationName"
+        class="ml-1 inline-flex items-center gap-1 px-1 py-0.5 rounded-[2px] text-[8px] font-mono font-bold tracking-wider uppercase bg-info/10 text-info shrink-0"
+        :title="`Restricted to population: ${parentPopulationName}`"
+      >
+        <Filter class="w-2.5 h-2.5 stroke-[2px]" />
+        {{ parentPopulationName }}
+      </span>
       <span class="text-[8px] font-mono text-neutral/30 ml-1 shrink-0">{{ pointCount.toLocaleString() }} pts</span>
 
       <div class="ml-auto flex items-center gap-0.5">
@@ -128,29 +128,6 @@ const pointCount = computed(() => props.plotData?.data.length ?? 0)
           <component :is="tool.icon" class="w-3 h-3 stroke-[2px]" />
         </button>
 
-        <!-- Divider -->
-        <div class="w-px h-4 bg-base-300 mx-0.5"></div>
-
-        <!-- Zoom to gate (picks first gate if any) -->
-        <button
-          v-if="gates.length > 0"
-          class="h-6 w-6 flex items-center justify-center rounded-[2px] text-neutral/40 hover:bg-neutral/10 hover:text-neutral transition-colors"
-          title="Zoom to gate"
-          @click.stop="renderer.zoomToGate(gates[0])"
-        >
-          <ZoomIn class="w-3 h-3 stroke-[2px]" />
-        </button>
-
-        <!-- Reset view -->
-        <button
-          v-if="renderer.isZoomed.value"
-          class="h-6 w-6 flex items-center justify-center rounded-[2px] text-neutral/40 hover:bg-neutral/10 hover:text-neutral transition-colors"
-          title="Reset view"
-          @click.stop="renderer.resetView()"
-        >
-          <Maximize2 class="w-3 h-3 stroke-[2px]" />
-        </button>
-
         <!-- Remove plot from workspace -->
         <button
           class="h-6 w-6 flex items-center justify-center rounded-[2px] text-neutral/25 hover:bg-error/10 hover:text-error transition-colors ml-1"
@@ -160,17 +137,6 @@ const pointCount = computed(() => props.plotData?.data.length ?? 0)
           <X class="w-3 h-3 stroke-[2px]" />
         </button>
       </div>
-    </div>
-
-    <!-- Sub-gating indicator -->
-    <div
-      v-if="parentGateName"
-      class="px-2 py-1 bg-info/10 border-b border-info/20 flex items-center gap-1.5"
-    >
-      <span class="w-1.5 h-1.5 rounded-full bg-info shrink-0"></span>
-      <span class="text-[9px] font-mono font-bold text-info tracking-wider uppercase truncate">
-        Sub-gating within: {{ parentGateName }}
-      </span>
     </div>
 
     <!-- Rendering container -->

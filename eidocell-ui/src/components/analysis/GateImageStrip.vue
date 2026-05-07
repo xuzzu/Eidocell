@@ -14,28 +14,23 @@ const loading = ref(false)
 
 const MAX_THUMBNAILS = 50
 
-// Fetch population sample IDs when selected gate changes
 watch(
-  () => analysis.selectedPlotId && analysis.gates,
-  async () => {
+  () => analysis.selectedGateId,
+  async gateId => {
     const sid = sessionStore.currentSessionId
-    if (!sid || analysis.gates.length === 0) {
+    if (!sid || !gateId) {
       sampleIds.value = []
       return
     }
-    // Use the first active gate on the selected plot, or the first gate
-    const activeGate = analysis.gates.find(g => g.is_active) ?? analysis.gates[0]
-    if (!activeGate) { sampleIds.value = []; return }
-
     loading.value = true
     try {
-      const ids = await analysisApi.getGatePopulation(sid, activeGate.id)
+      const ids = await analysisApi.getGatePopulation(sid, gateId)
       sampleIds.value = ids.slice(0, MAX_THUMBNAILS)
     } finally {
       loading.value = false
     }
   },
-  { deep: true, immediate: true },
+  { immediate: true },
 )
 
 function thumbnailSrc(sampleId: string): string {
@@ -50,7 +45,7 @@ function thumbnailSrc(sampleId: string): string {
     <div class="flex items-center gap-1.5">
       <Images class="w-3 h-3 text-neutral/40 stroke-[2px]" />
       <span class="text-[10px] font-bold tracking-widest uppercase text-neutral/70">
-        Gate Samples
+        Population samples
       </span>
       <span class="text-[9px] font-mono text-neutral/40">{{ sampleIds.length }}{{ sampleIds.length >= MAX_THUMBNAILS ? '+' : '' }}</span>
     </div>
