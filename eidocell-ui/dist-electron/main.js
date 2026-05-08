@@ -1,125 +1,87 @@
-var __defProp = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { spawn } from "node:child_process";
-const PY_HOST = "127.0.0.1";
-const PY_PORT = 8e3;
-const isDev = !app.isPackaged;
-class PythonManager {
+var R = Object.defineProperty;
+var _ = (t, e, o) => e in t ? R(t, e, { enumerable: !0, configurable: !0, writable: !0, value: o }) : t[e] = o;
+var c = (t, e, o) => _(t, typeof e != "symbol" ? e + "" : e, o);
+import { app as r, BrowserWindow as g, ipcMain as T, dialog as E } from "electron";
+import { fileURLToPath as y } from "node:url";
+import s from "node:path";
+import { spawn as S } from "node:child_process";
+const v = "127.0.0.1", O = 8e3, h = !r.isPackaged;
+class j {
   constructor() {
-    __publicField(this, "process", null);
-    __publicField(this, "isStopping", false);
+    c(this, "process", null);
+    c(this, "isStopping", !1);
   }
   getConfig() {
-    if (isDev) {
+    if (h)
       return {
         command: "poetry",
-        args: ["run", "uvicorn", "main:app", "--host", PY_HOST, "--port", `${PY_PORT}`, "--reload"],
-        cwd: path.join(process.env.APP_ROOT, "..", "eidocell-backend"),
-        shell: true
+        args: ["run", "uvicorn", "main:app", "--host", v, "--port", `${O}`, "--reload"],
+        cwd: s.join(process.env.APP_ROOT, "..", "eidocell-backend"),
+        shell: !0
       };
-    } else {
-      const exeName = process.platform === "win32" ? "eidocell-backend.exe" : "eidocell-backend";
+    {
+      const e = process.platform === "win32" ? "eidocell-backend.exe" : "eidocell-backend";
       return {
-        command: path.join(process.resourcesPath, "eidocell-backend", exeName),
+        command: s.join(process.resourcesPath, "eidocell-backend", e),
         args: [],
-        cwd: path.join(process.resourcesPath, "eidocell-backend"),
-        shell: false
+        cwd: s.join(process.resourcesPath, "eidocell-backend"),
+        shell: !1
       };
     }
   }
   start() {
-    var _a, _b;
-    const { command, args, cwd, shell } = this.getConfig();
-    console.log(`[PythonManager] Spawning: ${command} ${args.join(" ")} (cwd: ${cwd})`);
-    this.process = spawn(command, args, { cwd, shell, stdio: "pipe" });
-    (_a = this.process.stdout) == null ? void 0 : _a.on("data", (data) => {
-      console.log(`[PY]: ${data.toString().trim()}`);
-    });
-    (_b = this.process.stderr) == null ? void 0 : _b.on("data", (data) => {
-      console.error(`[PY ERR]: ${data.toString().trim()}`);
-    });
-    this.process.on("close", (code) => {
-      console.log(`[PythonManager] Process exited with code ${code}`);
-      this.process = null;
-      if (!this.isStopping && !isDev && code !== 0) {
-        console.log("[PythonManager] Process crashed. Restarting in 3s...");
-        setTimeout(() => this.start(), 3e3);
-      }
+    var p, d;
+    const { command: e, args: o, cwd: l, shell: f } = this.getConfig();
+    console.log(`[PythonManager] Spawning: ${e} ${o.join(" ")} (cwd: ${l})`), this.process = S(e, o, { cwd: l, shell: f, stdio: "pipe" }), (p = this.process.stdout) == null || p.on("data", (i) => {
+      console.log(`[PY]: ${i.toString().trim()}`);
+    }), (d = this.process.stderr) == null || d.on("data", (i) => {
+      console.error(`[PY ERR]: ${i.toString().trim()}`);
+    }), this.process.on("close", (i) => {
+      console.log(`[PythonManager] Process exited with code ${i}`), this.process = null, !this.isStopping && !h && i !== 0 && (console.log("[PythonManager] Process crashed. Restarting in 3s..."), setTimeout(() => this.start(), 3e3));
     });
   }
   stop() {
-    var _a;
-    this.isStopping = true;
-    if ((_a = this.process) == null ? void 0 : _a.pid) {
-      console.log("[PythonManager] Killing Python process tree...");
-      import("./index-B5ulREBd.js").then((n) => n.i).then(({ default: treeKill }) => {
-        treeKill(this.process.pid, "SIGTERM", (err) => {
-          if (err) {
-            console.error("[PythonManager] Failed to kill process tree:", err);
-          } else {
-            console.log("[PythonManager] Process tree killed.");
-          }
-        });
-      }).catch(() => {
-        var _a2;
-        (_a2 = this.process) == null ? void 0 : _a2.kill("SIGTERM");
+    var e;
+    this.isStopping = !0, (e = this.process) != null && e.pid && (console.log("[PythonManager] Killing Python process tree..."), import("./index-D7PzKsyU.js").then((o) => o.i).then(({ default: o }) => {
+      o(this.process.pid, "SIGTERM", (l) => {
+        l ? console.error("[PythonManager] Failed to kill process tree:", l) : console.log("[PythonManager] Process tree killed.");
       });
-      this.process = null;
-    }
+    }).catch(() => {
+      var o;
+      (o = this.process) == null || o.kill("SIGTERM");
+    }), this.process = null);
   }
 }
-const pythonManager = new PythonManager();
-const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
-process.env.APP_ROOT = path.join(__dirname$1, "..");
-const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-const MAIN_DIST = path.join(process.env.APP_ROOT, "dist-electron");
-const RENDERER_DIST = path.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
-function createWindow() {
-  win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+const P = new j(), m = s.dirname(y(import.meta.url));
+process.env.APP_ROOT = s.join(m, "..");
+const a = process.env.VITE_DEV_SERVER_URL, V = s.join(process.env.APP_ROOT, "dist-electron"), u = s.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = a ? s.join(process.env.APP_ROOT, "public") : u;
+let n;
+function w() {
+  n = new g({
+    icon: s.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
     webPreferences: {
-      preload: path.join(__dirname$1, "preload.mjs")
+      preload: s.join(m, "preload.mjs")
     }
-  });
-  win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  });
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    win.loadFile(path.join(RENDERER_DIST, "index.html"));
-  }
+  }), n.webContents.on("did-finish-load", () => {
+    n == null || n.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), a ? n.loadURL(a) : n.loadFile(s.join(u, "index.html"));
 }
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-    win = null;
-  }
+r.on("window-all-closed", () => {
+  process.platform !== "darwin" && (r.quit(), n = null);
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+r.on("activate", () => {
+  g.getAllWindows().length === 0 && w();
 });
-ipcMain.handle("select-directory", async () => {
-  const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
-  return result.filePaths[0] ?? null;
+T.handle("select-directory", async () => (await E.showOpenDialog({ properties: ["openDirectory"] })).filePaths[0] ?? null);
+r.whenReady().then(() => {
+  P.start(), w();
 });
-app.whenReady().then(() => {
-  pythonManager.start();
-  createWindow();
-});
-app.on("will-quit", () => {
-  pythonManager.stop();
+r.on("will-quit", () => {
+  P.stop();
 });
 export {
-  MAIN_DIST,
-  RENDERER_DIST,
-  VITE_DEV_SERVER_URL
+  V as MAIN_DIST,
+  u as RENDERER_DIST,
+  a as VITE_DEV_SERVER_URL
 };
