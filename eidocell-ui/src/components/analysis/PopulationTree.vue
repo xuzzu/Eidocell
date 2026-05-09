@@ -4,8 +4,39 @@ import { RotateCcw, GitMerge } from 'lucide-vue-next'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { PopulationTreeNode as TreeNode } from '@/types'
 import PopulationTreeNode from '@/components/analysis/PopulationTreeNode.vue'
+import GateContextMenu from '@/components/analysis/GateContextMenu.vue'
+import GateRenameDialog from '@/components/analysis/GateRenameDialog.vue'
 
 const analysis = useAnalysisStore()
+
+const ctxMenu = ref<{
+  visible: boolean
+  x: number
+  y: number
+  gateId: string | null
+  gateName: string
+}>({ visible: false, x: 0, y: 0, gateId: null, gateName: '' })
+
+const renameDialog = ref<InstanceType<typeof GateRenameDialog>>()
+
+function onNodeContextmenu(id: string, name: string, e: MouseEvent) {
+  ctxMenu.value = { visible: true, x: e.clientX, y: e.clientY, gateId: id, gateName: name }
+}
+
+async function onRename() {
+  const id = ctxMenu.value.gateId
+  const initial = ctxMenu.value.gateName
+  if (!id) return
+  const newName = await renameDialog.value?.open(initial)
+  if (newName) {
+    await analysis.updateGate(id, { name: newName })
+  }
+}
+
+function onDeleteFromMenu() {
+  const id = ctxMenu.value.gateId
+  if (id) analysis.deleteGate(id)
+}
 
 const expandedIds = ref<Set<string>>(new Set(['__root__']))
 const draggingId = ref<string | null>(null)
@@ -128,6 +159,7 @@ async function onReparent(sourceId: string, newParentId: string | null) {
         @drag-start="onDragStart"
         @drag-end="onDragEnd"
         @reparent="onReparent"
+        @contextmenu="onNodeContextmenu"
       />
 
       <!-- Boolean populations (flat list) -->
@@ -155,6 +187,7 @@ async function onReparent(sourceId: string, newParentId: string | null) {
             @drag-start="onDragStart"
             @drag-end="onDragEnd"
             @reparent="onReparent"
+            @contextmenu="onNodeContextmenu"
           />
         </div>
       </div>
@@ -164,7 +197,21 @@ async function onReparent(sourceId: string, newParentId: string | null) {
       v-if="tree && (tree.root.children.length > 0 || tree.booleans.length > 0)"
       class="text-[9px] font-mono text-neutral/30 leading-snug mt-1"
     >
-      Click a row to make it the active population. Drag rows to reparent.
+      Click a row to make it the active population. Drag rows to reparent. Right-click to rename.
     </p>
+
+    <Teleport to="body">
+      <GateContextMenu
+        v-if="ctxMenu.visible"
+        :x="ctxMenu.x"
+        :y="ctxMenu.y"
+        :can-delete="true"
+        @rename="onRename"
+        @delete="onDeleteFromMenu"
+        @close="ctxMenu.visible = false"
+      />
+    </Teleport>
+
+    <GateRenameDialog ref="renameDialog" />
   </div>
 </template>

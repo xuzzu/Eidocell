@@ -24,6 +24,7 @@ const emit = defineEmits<{
   dragStart: [id: string]
   dragEnd: []
   reparent: [sourceId: string, newParentId: string | null]
+  contextmenu: [id: string, name: string, e: MouseEvent]
 }>()
 
 const isRoot = computed(() => props.node.gate_type === 'root')
@@ -122,6 +123,7 @@ const fullCount = computed(() => props.node.sample_count.toLocaleString())
       :draggable="isDraggable"
       :title="`${node.name} • ${fullCount} • ${node.percentage.toFixed(1)}%`"
       @click.stop="emit('select', node.id)"
+      @contextmenu.prevent="!isRoot && emit('contextmenu', node.id, node.name, $event)"
       @dragstart="onDragStart"
       @dragend="onDragEnd"
       @dragover="onDragOver"
@@ -210,6 +212,7 @@ const fullCount = computed(() => props.node.sample_count.toLocaleString())
           @drag-start="(id) => emit('dragStart', id)"
           @drag-end="emit('dragEnd')"
           @reparent="(s, p) => emit('reparent', s, p)"
+          @contextmenu="(id, name, e) => emit('contextmenu', id, name, e)"
         />
       </div>
     </template>

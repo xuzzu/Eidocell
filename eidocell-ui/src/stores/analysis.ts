@@ -5,7 +5,7 @@ import { useGalleryStore } from './gallery'
 import * as analysisApi from '@/api/analysis'
 import type {
   PlotOut, PlotData, GateOut,
-  PlotCreate, GateCreate, GateUpdate, BooleanGateCreate,
+  PlotCreate, PlotUpdate, GateCreate, GateUpdate, BooleanGateCreate,
   PlotLayout, PopulationTreeResponse,
 } from '@/types'
 
@@ -133,6 +133,16 @@ export const useAnalysisStore = defineStore('analysis', () => {
     }
   }
 
+  async function updatePlot(plotId: string, data: PlotUpdate) {
+    if (!sessionStore.currentSessionId) return
+    const updated = await analysisApi.updatePlot(sessionStore.currentSessionId, plotId, data)
+    const idx = plots.value.findIndex(p => p.id === plotId)
+    if (idx >= 0) plots.value[idx] = updated
+    // Re-fetch the plot data so renderer picks up new params/axes/scales.
+    await fetchPlotData(plotId)
+    return updated
+  }
+
   async function deletePlot(plotId: string) {
     if (!sessionStore.currentSessionId) return
     await analysisApi.deletePlot(sessionStore.currentSessionId, plotId)
@@ -204,7 +214,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     $reset,
     fetchParameters, fetchPlots, fetchAllGates, fetchPopulationTree,
     fetchSelectedPopulation, fetchActiveSamples, refreshGatingState,
-    createPlot, selectPlot, deletePlot,
+    createPlot, updatePlot, selectPlot, deletePlot,
     addPlotToWorkspace, removePlotFromWorkspace, fetchPlotData,
     createGate, createBooleanGate, updateGate, deleteGate,
     selectPopulation, resetAllGates,

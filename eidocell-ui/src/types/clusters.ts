@@ -77,3 +77,19 @@ export type ClusterSortMode =
   | 'count_asc'
   | 'labeled_desc'
   | 'quality_desc'
+
+export interface ClusterAttributeStatistics {
+  name: string
+  mean: number | null
+  std: number | null
+  min: number | null
+  max: number | null
+  median: number | null
+}
+
+export interface ClusterStatistics {
+  id: string
+  color: string
+  sample_count: number
+  attributes: ClusterAttributeStatistics[]
+}

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from db.session import get_db
 from schemas.workspace.analysis import (
-    PlotCreate, PlotOut, PlotData,
+    PlotCreate, PlotOut, PlotData, PlotUpdate,
     GateCreate, GateUpdate, GateOut,
     BooleanGateCreate, SelectPopulationRequest,
 )
@@ -97,6 +97,13 @@ class BatchPlotDataRequest(BaseModel):
 def batch_plot_data(session_id: str, data: BatchPlotDataRequest, db: DbSession = Depends(get_db)):
     """Fetch data for multiple plots in a single round-trip."""
     return {"plots": analysis_service.batch_plot_data(db, data.plot_ids, max_points=data.max_points)}
+
+
+@router.patch("/plots/{plot_id}", response_model=PlotOut)
+def update_plot(
+    session_id: str, plot_id: str, data: PlotUpdate, db: DbSession = Depends(get_db)
+):
+    return analysis_service.update_plot(db, plot_id, name=data.name, parameters=data.parameters)
 
 
 @router.delete("/plots/{plot_id}", status_code=204)

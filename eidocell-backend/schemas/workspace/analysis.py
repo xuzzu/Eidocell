@@ -28,6 +28,11 @@ class PlotCreate(BaseModel):
     parent_gate_id: str | None = None  # restrict plot to this population
 
 
+class PlotUpdate(BaseModel):
+    name: str | None = None
+    parameters: dict | None = None
+
+
 class PlotOut(BaseModel):
     id: str
     name: str

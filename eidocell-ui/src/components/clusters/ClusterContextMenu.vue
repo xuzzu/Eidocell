@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Eye, Scissors, Merge, Plus } from 'lucide-vue-next'
+import { Eye, Scissors, Merge, Plus, BarChart3 } from 'lucide-vue-next'
 import type { ClassOut } from '@/types'
 
 const props = defineProps<{
@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   view: []
+  showStats: []
   split: [n: number]
   merge: []
   assignClass: [classId: string]
@@ -58,6 +59,12 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
         @click="emit('view'); emit('close')"
       >
         <Eye class="w-3.5 h-3.5 shrink-0 stroke-[2px]" /> View Samples
+      </button>
+      <button
+        class="w-full flex items-center gap-3 px-3 py-2 text-[11px] font-mono font-bold tracking-widest uppercase hover:bg-neutral hover:text-neutral-content transition-colors text-left"
+        @click="emit('showStats'); emit('close')"
+      >
+        <BarChart3 class="w-3.5 h-3.5 shrink-0 stroke-[2px]" /> Show Statistics
       </button>
       <div v-if="!showSplitPrompt">
         <button

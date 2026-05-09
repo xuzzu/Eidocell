@@ -13,6 +13,7 @@ from schemas.workspace.clusters import (
     ClusteringResult,
     SplitClusterResult,
     MergeClustersResult,
+    ClusterStatistics,
 )
 from schemas.workspace.gallery import SamplePage
 from services.workspace import clusters_service
@@ -83,6 +84,13 @@ def get_cluster_preview(
 ):
     path = clusters_service.get_or_generate_collage(db, cluster_id)
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/{cluster_id}/statistics", response_model=ClusterStatistics)
+def get_cluster_statistics(
+    session_id: str, cluster_id: str, db: DbSession = Depends(get_db)
+):
+    return clusters_service.get_cluster_statistics(db, cluster_id)
 
 
 @router.delete("/{cluster_id}", status_code=204)

@@ -48,8 +48,10 @@ export function usePlotRenderer(options: PlotRendererOptions) {
   let pixi: Application | null = null
   let svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null
   let dataContainer: Container | null = null
-  let xScale: d3.ScaleLinear<number, number> = d3.scaleLinear()
-  let yScale: d3.ScaleLinear<number, number> = d3.scaleLinear()
+  // Either a linear or log scale; both expose the same shape (.domain, .range, .invert, .copy).
+  type AxisScale = d3.ScaleContinuousNumeric<number, number>
+  let xScale: AxisScale = d3.scaleLinear()
+  let yScale: AxisScale = d3.scaleLinear()
   let width = 0
   let height = 0
   let resizeObserver: ResizeObserver | null = null
@@ -186,48 +188,64 @@ export function usePlotRenderer(options: PlotRendererOptions) {
 
     // If domains are already locked, only refresh ranges (resize case).
     if (xDomainLocked) {
-      xScale = xScale.copy().range(xRange)
+      xScale = xScale.copy().range(xRange) as AxisScale
     }
     if (yDomainLocked && chartType.value !== 'histogram') {
-      yScale = yScale.copy().range(yRange)
+      yScale = yScale.copy().range(yRange) as AxisScale
     }
     if (xDomainLocked && (yDomainLocked || chartType.value === 'histogram')) {
       // Histogram y-domain is recomputed per-render in renderHistogram, so we
       // only need to ensure its range is current.
       if (chartType.value === 'histogram') {
-        yScale = yScale.copy().range(yRange)
+        yScale = yScale.copy().range(yRange) as AxisScale
       }
       return
     }
 
     const xVar = data.parameters.x_variable as string
     const yVar = data.parameters.y_variable as string | undefined
+    const xScaleType = (data.parameters.x_scale_type as string) === 'log' ? 'log' : 'linear'
+    const yScaleType = (data.parameters.y_scale_type as string) === 'log' ? 'log' : 'linear'
 
     if (!xDomainLocked) {
-      const xVals = data.data.map(p => p.values[xVar]).filter(v => v != null)
+      const xVals = data.data.map(p => p.values[xVar]).filter(v => v != null) as number[]
       if (xVals.length === 0) return
-      const xMin = d3.min(xVals)!
-      const xMax = d3.max(xVals)!
-      const xPad = (xMax - xMin) * 0.02 || 1
-      xScale = d3.scaleLinear()
-        .domain([xMin - xPad, xMax + xPad])
-        .range(xRange)
+      xScale = makeAxisScale(xScaleType, xVals, xRange)
       xDomainLocked = true
     }
 
     if (chartType.value === 'histogram') {
+      // Histogram y is always linear (counts, recomputed per render).
       yScale = d3.scaleLinear().range(yRange)
     } else if (!yDomainLocked) {
-      const yVals = data.data.map(p => p.values[yVar!]).filter(v => v != null)
+      const yVals = data.data.map(p => p.values[yVar!]).filter(v => v != null) as number[]
       if (yVals.length === 0) return
-      const yMin = d3.min(yVals)!
-      const yMax = d3.max(yVals)!
-      const yPad = (yMax - yMin) * 0.02 || 1
-      yScale = d3.scaleLinear()
-        .domain([yMin - yPad, yMax + yPad])
-        .range(yRange)
+      yScale = makeAxisScale(yScaleType, yVals, yRange)
       yDomainLocked = true
     }
+  }
+
+  function makeAxisScale(
+    kind: 'linear' | 'log',
+    values: number[],
+    range: [number, number],
+  ): AxisScale {
+    if (kind === 'log') {
+      // Log scale requires strictly positive bounds. Clamp the lower bound so
+      // values <= 0 don't break the scale; fall back to linear if there is
+      // nothing positive.
+      const positives = values.filter(v => v > 0)
+      if (positives.length === 0) {
+        return makeAxisScale('linear', values, range)
+      }
+      const lo = Math.max(d3.min(positives)!, 1e-12)
+      const hi = d3.max(positives)!
+      return d3.scaleLog().domain([lo, hi]).range(range).clamp(true)
+    }
+    const lo = d3.min(values)!
+    const hi = d3.max(values)!
+    const pad = (hi - lo) * 0.02 || 1
+    return d3.scaleLinear().domain([lo - pad, hi + pad]).range(range)
   }
 
   // ── Data Rendering (PixiJS) ───────────────────────────────────────────
@@ -256,14 +274,26 @@ export function usePlotRenderer(options: PlotRendererOptions) {
   function renderHistogram(data: PlotData) {
     if (!dataContainer) return
     const xVar = data.parameters.x_variable as string
-    const values = data.data.map(p => p.values[xVar]).filter(v => v != null)
+    const xScaleType = (data.parameters.x_scale_type as string) === 'log' ? 'log' : 'linear'
+    let values = data.data.map(p => p.values[xVar]).filter(v => v != null) as number[]
+    if (xScaleType === 'log') values = values.filter(v => v > 0)
     if (values.length === 0) return
 
     const numBins = (data.parameters.num_bins as number) ?? 30
 
     const binner = d3.bin()
       .domain(xScale.domain() as [number, number])
-      .thresholds(numBins)
+
+    if (xScaleType === 'log') {
+      const [lo, hi] = xScale.domain() as [number, number]
+      const lLo = Math.log10(lo)
+      const lHi = Math.log10(hi)
+      const step = (lHi - lLo) / numBins
+      const thresholds = d3.range(1, numBins).map(i => Math.pow(10, lLo + i * step))
+      binner.thresholds(thresholds)
+    } else {
+      binner.thresholds(numBins)
+    }
 
     const bins = binner(values)
     const maxCount = d3.max(bins, b => b.length) || 1

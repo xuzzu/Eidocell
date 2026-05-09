@@ -10,6 +10,11 @@ export interface PlotCreate {
   parent_gate_id?: string | null
 }
 
+export interface PlotUpdate {
+  name?: string
+  parameters?: Record<string, unknown>
+}
+
 export interface PlotOut {
   id: string
   name: string

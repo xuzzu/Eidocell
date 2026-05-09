@@ -14,6 +14,7 @@ import ClassFormDialog from '@/components/classes/ClassFormDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import TaskProgressBar from '@/components/common/TaskProgressBar.vue'
 import SamplePreviewDialog from '@/components/common/SamplePreviewDialog.vue'
+import StatsDialog from '@/components/common/StatsDialog.vue'
 import GatingActiveBanner from '@/components/common/GatingActiveBanner.vue'
 import type { ClusterSortMode } from '@/types'
 
@@ -21,6 +22,7 @@ const clusters = useClustersStore()
 const gallery = useGalleryStore()
 const sessionStore = useSessionStore()
 const previewDialog = ref<InstanceType<typeof SamplePreviewDialog>>()
+const statsDialog = ref<InstanceType<typeof StatsDialog>>()
 const quickClassDialog = ref<InstanceType<typeof ClassFormDialog>>()
 const pendingClusterIds = ref<string[]>([])
 const gridContainer = ref<HTMLElement>()
@@ -95,6 +97,19 @@ function onContextmenu(e: MouseEvent, clusterId: string) {
 function onContextSplit(n: number) {
   const id = Array.from(clusters.selectedClusterIds)[0]
   if (id) clusters.splitCluster(id, n)
+}
+
+function onShowStats() {
+  const id = Array.from(clusters.selectedClusterIds)[0]
+  if (!id) return
+  const idx = clusters.sortedClusters.findIndex(c => c.id === id)
+  const cluster = clusters.clusters.find(c => c.id === id)
+  if (!cluster) return
+  statsDialog.value?.openForCluster({
+    id: cluster.id,
+    color: cluster.color,
+    index: idx >= 0 ? idx : undefined,
+  })
 }
 
 function onCreateClassAndAssign() {
@@ -264,6 +279,7 @@ watch(
       :selected-ids="Array.from(clusters.selectedClusterIds)"
       :classes="gallery.classes"
       @view="onPreview(Array.from(clusters.selectedClusterIds)[0])"
+      @show-stats="onShowStats"
       @split="onContextSplit"
       @merge="clusters.mergeClusters(Array.from(clusters.selectedClusterIds))"
       @assign-class="(id) => clusters.assignToClass(Array.from(clusters.selectedClusterIds), id)"
@@ -272,6 +288,7 @@ watch(
     />
 
     <SamplePreviewDialog ref="previewDialog" />
+    <StatsDialog ref="statsDialog" />
     <ClassFormDialog ref="quickClassDialog" @submit="onQuickClassSubmit" />
   </div>
 </template>

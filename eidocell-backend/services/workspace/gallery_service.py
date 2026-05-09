@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
+from core.notifications import notification_manager
 from core.processors.image_utils import generate_thumbnail
 from core.storage import mask_attrs as lance_mask_attrs
 from models.models import Mask, Sample, SampleClass
@@ -238,6 +239,7 @@ def delete_class(db: DbSession, class_id: str) -> None:
 
 
 def assign_samples_to_class(db: DbSession, data: BulkClassAssignment) -> int:
+    cls = None
     if data.class_id is not None:
         cls = db.query(SampleClass).filter(SampleClass.id == data.class_id).first()
         if not cls:
@@ -249,6 +251,23 @@ def assign_samples_to_class(db: DbSession, data: BulkClassAssignment) -> int:
         .update({"class_id": data.class_id}, synchronize_session="fetch")
     )
     db.commit()
+
+    if updated > 0:
+        if cls is not None:
+            notification_manager.broadcast(
+                title="Samples assigned",
+                message=f"Assigned {updated} sample{'s' if updated != 1 else ''} to {cls.name}.",
+                level="success",
+                data={"class_id": cls.id, "class_name": cls.name, "count": updated},
+            )
+        else:
+            notification_manager.broadcast(
+                title="Samples unassigned",
+                message=f"Removed class from {updated} sample{'s' if updated != 1 else ''}.",
+                level="info",
+                data={"count": updated},
+            )
+
     return updated
 
 

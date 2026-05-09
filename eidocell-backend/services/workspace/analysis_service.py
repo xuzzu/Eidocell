@@ -85,6 +85,36 @@ def get_plot(db: DbSession, plot_id: str) -> dict:
     return _plot_to_out(plot, gate_count)
 
 
+def update_plot(
+    db: DbSession, plot_id: str,
+    name: str | None = None,
+    parameters: dict | None = None,
+) -> dict:
+    plot = db.query(Plot).filter(Plot.id == plot_id).first()
+    if not plot:
+        raise HTTPException(status_code=404, detail="Plot not found")
+
+    if name is not None:
+        plot.name = name
+
+    if parameters is not None:
+        if plot.chart_type == "histogram":
+            if "x_variable" not in parameters:
+                raise HTTPException(status_code=400, detail="Histogram requires x_variable")
+        else:
+            if "x_variable" not in parameters or "y_variable" not in parameters:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{plot.chart_type.title()} requires x_variable and y_variable",
+                )
+        plot.parameters = parameters
+
+    db.commit()
+    db.refresh(plot)
+    gate_count = db.query(func.count(Gate.id)).filter(Gate.plot_id == plot.id).scalar()
+    return _plot_to_out(plot, gate_count)
+
+
 def delete_plot(db: DbSession, plot_id: str) -> None:
     plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if not plot:

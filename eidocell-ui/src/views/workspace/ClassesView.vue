@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Plus, Trash2, Tag, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { Plus, Trash2, Tag, ChevronDown, ChevronUp, GitCompare } from 'lucide-vue-next'
 import { useClassesStore } from '@/stores/classes'
 import { useSessionStore } from '@/stores/session'
 import { classPreviewUrl, getClassStatistics, getClassSamples, getSessionDistributions } from '@/api/classes'
 import type { ClassStatistics, SessionDistributions, AttributeDistribution } from '@/types'
 import ClassFormDialog from '@/components/classes/ClassFormDialog.vue'
 import AttributeMiniHistogram from '@/components/classes/AttributeMiniHistogram.vue'
+import ClassContextMenu from '@/components/classes/ClassContextMenu.vue'
 import TrainingPanel from '@/components/classes/TrainingPanel.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import SamplePreviewDialog from '@/components/common/SamplePreviewDialog.vue'
+import StatsDialog from '@/components/common/StatsDialog.vue'
+import ClassCompareDialog from '@/components/classes/ClassCompareDialog.vue'
+import { useStatsPreferences } from '@/composables/useStatsPreferences'
+
+const prefs = useStatsPreferences()
 
 const classesStore = useClassesStore()
 const sessionStore = useSessionStore()
@@ -19,7 +25,20 @@ const sid = computed(() => sessionStore.currentSessionId!)
 const formDialog = ref<InstanceType<typeof ClassFormDialog>>()
 const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const previewDialog = ref<InstanceType<typeof SamplePreviewDialog>>()
+const statsDialog = ref<InstanceType<typeof StatsDialog>>()
+const compareDialog = ref<InstanceType<typeof ClassCompareDialog>>()
 const deleteTargetId = ref<string | null>(null)
+
+const ctxMenu = ref<{
+  visible: boolean
+  x: number
+  y: number
+  classId: string | null
+  className: string
+  isUncategorized: boolean
+}>({
+  visible: false, x: 0, y: 0, classId: null, className: '', isUncategorized: false,
+})
 
 // Cache-bust preview images on class changes
 const previewCacheBuster = ref(Date.now())
@@ -98,6 +117,38 @@ async function toggleExpand(classId: string) {
 function formatAttrName(name: string): string {
   return name.replace(/_/g, ' ')
 }
+
+function onContextmenu(e: MouseEvent, cls: { id: string; name: string }) {
+  ctxMenu.value = {
+    visible: true,
+    x: e.clientX,
+    y: e.clientY,
+    classId: cls.id,
+    className: cls.name,
+    isUncategorized: cls.name === 'Uncategorized',
+  }
+}
+
+function onShowStatsFromMenu() {
+  const id = ctxMenu.value.classId
+  if (!id) return
+  const cls = classesStore.classes.find(c => c.id === id)
+  if (!cls) return
+  statsDialog.value?.openForClass({ id: cls.id, name: cls.name, color: cls.color })
+}
+
+function onDeleteFromMenu() {
+  const id = ctxMenu.value.classId
+  if (id) {
+    deleteTargetId.value = id
+    confirmDialog.value?.open()
+  }
+}
+
+function onViewFromMenu() {
+  const id = ctxMenu.value.classId
+  if (id) onPreview(id)
+}
 </script>
 
 <template>
@@ -106,10 +157,21 @@ function formatAttrName(name: string): string {
     <div class="flex-[2] flex flex-col min-w-0 bg-base-100 border border-base-300 shadow-sm rounded-[2px] p-6 text-neutral overflow-hidden">
       <div class="flex items-center justify-between mb-6 shrink-0">
         <h2 class="text-[14px] font-bold tracking-widest uppercase">Class Manager</h2>
-        <button class="h-8 px-4 flex items-center gap-2 rounded-[2px] bg-neutral text-neutral-content text-[10px] font-bold tracking-widest uppercase transition-opacity hover:opacity-80 shadow-sm" @click="formDialog?.open()">
-          <Plus class="w-3.5 h-3.5 stroke-[2px]" />
-          NEW CLASS
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            class="h-8 px-4 flex items-center gap-2 rounded-[2px] border border-base-300 text-neutral text-[10px] font-bold tracking-widest uppercase transition-colors hover:bg-neutral/5 disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="classesStore.classes.filter(c => c.name !== 'Uncategorized').length < 2"
+            title="Compare statistics across classes"
+            @click="compareDialog?.open()"
+          >
+            <GitCompare class="w-3.5 h-3.5 stroke-[2px]" />
+            COMPARE
+          </button>
+          <button class="h-8 px-4 flex items-center gap-2 rounded-[2px] bg-neutral text-neutral-content text-[10px] font-bold tracking-widest uppercase transition-opacity hover:opacity-80 shadow-sm" @click="formDialog?.open()">
+            <Plus class="w-3.5 h-3.5 stroke-[2px]" />
+            NEW CLASS
+          </button>
+        </div>
       </div>
 
       <div class="flex-1 overflow-y-auto min-h-0 border border-base-200 rounded-[2px]">
@@ -135,6 +197,7 @@ function formatAttrName(name: string): string {
               <tr
                 class="cursor-pointer hover:bg-neutral/5 transition-colors border-b border-base-200"
                 @click="onPreview(cls.id)"
+                @contextmenu.prevent="onContextmenu($event, cls)"
               >
                 <td class="pl-4 py-3">
                   <div class="w-10 h-10 p-0.5 border border-base-300 bg-base-200 rounded-[2px] transition-all" :style="{ borderColor: cls.color }">
@@ -183,7 +246,7 @@ function formatAttrName(name: string): string {
                   </div>
                   <div v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                     <div
-                      v-for="attr in classStats.get(cls.id)?.attributes"
+                      v-for="attr in classStats.get(cls.id)?.attributes.filter(a => prefs.isVisible(a.name))"
                       :key="attr.name"
                       class="p-2 bg-base-100 border border-base-300 rounded-[2px]"
                     >
@@ -211,6 +274,18 @@ function formatAttrName(name: string): string {
     <!-- Right: Training Panel -->
     <TrainingPanel />
 
+    <!-- Context menu -->
+    <ClassContextMenu
+      v-if="ctxMenu.visible"
+      :x="ctxMenu.x"
+      :y="ctxMenu.y"
+      :is-uncategorized="ctxMenu.isUncategorized"
+      @view="onViewFromMenu"
+      @show-stats="onShowStatsFromMenu"
+      @delete="onDeleteFromMenu"
+      @close="ctxMenu.visible = false"
+    />
+
     <!-- Dialogs -->
     <ClassFormDialog ref="formDialog" @submit="onCreate" />
     <ConfirmDialog
@@ -222,5 +297,7 @@ function formatAttrName(name: string): string {
       @confirm="onDeleteConfirm"
     />
     <SamplePreviewDialog ref="previewDialog" />
+    <StatsDialog ref="statsDialog" />
+    <ClassCompareDialog ref="compareDialog" />
   </div>
 </template>

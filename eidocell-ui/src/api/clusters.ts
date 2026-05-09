@@ -5,6 +5,7 @@ import type {
   SplitClusterRequest, SplitClusterResult,
   MergeClustersRequest, MergeClustersResult,
   AssignClustersToClassRequest,
+  ClusterStatistics,
   SamplePage,
 } from '@/types'
 
@@ -22,6 +23,9 @@ export const clearClusters = (sid: string) =>
 
 export const getClusterSamples = (sid: string, clusterId: string, offset = 0, limit = 100) =>
   apiGet<SamplePage>(`/sessions/${sid}/clusters/${clusterId}/samples?offset=${offset}&limit=${limit}`)
+
+export const getClusterStatistics = (sid: string, clusterId: string) =>
+  apiGet<ClusterStatistics>(`/sessions/${sid}/clusters/${clusterId}/statistics`)
 
 export const clusterPreviewUrl = (sid: string, clusterId: string) =>
   imageUrl(`/sessions/${sid}/clusters/${clusterId}/preview`)

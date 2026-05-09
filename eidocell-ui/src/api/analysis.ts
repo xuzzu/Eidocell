@@ -1,6 +1,6 @@
 import { apiGet, apiPost, apiPatch, apiDelete, BASE_URL } from './client'
 import type {
-  PlotCreate, PlotOut, PlotData,
+  PlotCreate, PlotOut, PlotData, PlotUpdate,
   GateCreate, GateUpdate, GateOut,
   BooleanGateCreate, PopulationTreeResponse, SelectedPopulation,
 } from '@/types'
@@ -19,6 +19,9 @@ export const getPlot = (sid: string, plotId: string) =>
 
 export const getPlotData = (sid: string, plotId: string) =>
   apiGet<PlotData>(`/sessions/${sid}/analysis/plots/${plotId}/data`)
+
+export const updatePlot = (sid: string, plotId: string, data: PlotUpdate) =>
+  apiPatch<PlotOut>(`/sessions/${sid}/analysis/plots/${plotId}`, data)
 
 export const deletePlot = (sid: string, plotId: string) =>
   apiDelete(`/sessions/${sid}/analysis/plots/${plotId}`)

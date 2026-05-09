@@ -1,3 +1,4 @@
+import statistics
 from pathlib import Path
 
 import numpy as np
@@ -5,12 +6,15 @@ from fastapi import HTTPException
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session as DbSession
 
+from core.notifications import notification_manager
 from core.processors.image_utils import generate_collage, MAX_COLLAGE_SAMPLES
 from core.processors.inference.clustering import get_processor as get_clustering_processor
 from core.storage import features as lance_features
+from core.storage import mask_attrs as lance_mask_attrs
 from core.utils import get_active_samples, random_color
 from models.models import Cluster, Sample, SampleClass, Session, sample_clusters
 from services._pipeline_utils import compute_quality
+from services.workspace.classes_service import _STAT_ATTRIBUTES
 
 
 def _run_clustering_on_features(features: np.ndarray, n_clusters: int, **kwargs) -> np.ndarray:
@@ -367,7 +371,73 @@ def assign_clusters_to_class(
             updated += 1
 
     db.commit()
+
+    if updated > 0:
+        n_clusters = len(cluster_ids)
+        notification_manager.broadcast(
+            title="Samples assigned",
+            message=(
+                f"Assigned {updated} sample{'s' if updated != 1 else ''} from "
+                f"{n_clusters} cluster{'s' if n_clusters != 1 else ''} to {cls.name}."
+            ),
+            level="success",
+            data={
+                "class_id": cls.id,
+                "class_name": cls.name,
+                "count": updated,
+                "cluster_count": n_clusters,
+            },
+        )
+
     return updated
+
+
+# ── Statistics ──────────────────────────────────────────────────────────
+
+
+def get_cluster_statistics(db: DbSession, cluster_id: str) -> dict:
+    cluster = db.query(Cluster).filter(Cluster.id == cluster_id).first()
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    sample_ids = [
+        sid for (sid,) in (
+            db.query(Sample.id)
+            .join(sample_clusters, Sample.id == sample_clusters.c.sample_id)
+            .filter(sample_clusters.c.cluster_id == cluster_id, Sample.is_active == True)
+            .all()
+        )
+    ]
+    sample_count = len(sample_ids)
+
+    attrs_by_sid = lance_mask_attrs.get_attrs_bulk(cluster.session_id, sample_ids)
+
+    attr_stats = []
+    for attr_name in _STAT_ATTRIBUTES:
+        values: list[float] = []
+        for attrs in attrs_by_sid.values():
+            v = attrs.get(attr_name)
+            if v is not None and isinstance(v, (int, float)):
+                values.append(float(v))
+
+        if values:
+            attr_stats.append({
+                "name": attr_name,
+                "mean": statistics.mean(values),
+                "std": statistics.stdev(values) if len(values) > 1 else 0.0,
+                "min": min(values),
+                "max": max(values),
+                "median": statistics.median(values),
+            })
+        else:
+            attr_stats.append({"name": attr_name})
+
+    return {
+        "id": cluster.id,
+        "color": cluster.color,
+        "sample_count": sample_count,
+        "attributes": attr_stats,
+    }
 
 
 # ── Preview collage ─────────────────────────────────────────────────────

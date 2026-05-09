@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, toRef } from 'vue'
-import { Square, Pentagon, GripHorizontal, Circle, Crosshair, ArrowLeftRight, X, Filter } from 'lucide-vue-next'
+import { Square, Pentagon, GripHorizontal, Circle, Crosshair, ArrowLeftRight, X, Filter, Settings } from 'lucide-vue-next'
 import { usePlotRenderer, type GateDrawEvent, type GateEditEvent } from '@/composables/usePlotRenderer'
 import { nextGateColor } from '@/utils/gateColors'
 import { useAnalysisStore } from '@/stores/analysis'
+import PlotSettingsPopover from '@/components/analysis/PlotSettingsPopover.vue'
 import type { PlotOut, PlotData, GateOut, ChartType, GateCreate } from '@/types'
 
 const analysis = useAnalysisStore()
@@ -91,6 +92,21 @@ const parentPopulationName = computed(() => {
   if (!pid) return null
   return analysis.allGates.find(g => g.id === pid)?.name ?? null
 })
+
+const settingsPopover = ref<{ visible: boolean; x: number; y: number }>({
+  visible: false, x: 0, y: 0,
+})
+
+function openSettings(e: MouseEvent) {
+  const target = e.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  // Anchor below the gear icon, aligned to its right edge.
+  settingsPopover.value = {
+    visible: true,
+    x: rect.right - 280,
+    y: rect.bottom + 4,
+  }
+}
 </script>
 
 <template>
@@ -128,9 +144,21 @@ const parentPopulationName = computed(() => {
           <component :is="tool.icon" class="w-3 h-3 stroke-[2px]" />
         </button>
 
+        <!-- Plot settings -->
+        <button
+          class="h-6 w-6 flex items-center justify-center rounded-[2px] transition-colors ml-1"
+          :class="settingsPopover.visible
+            ? 'bg-neutral text-neutral-content'
+            : 'text-neutral/40 hover:bg-neutral/10 hover:text-neutral'"
+          title="Plot settings"
+          @click.stop="openSettings"
+        >
+          <Settings class="w-3 h-3 stroke-[2px]" />
+        </button>
+
         <!-- Remove plot from workspace -->
         <button
-          class="h-6 w-6 flex items-center justify-center rounded-[2px] text-neutral/25 hover:bg-error/10 hover:text-error transition-colors ml-1"
+          class="h-6 w-6 flex items-center justify-center rounded-[2px] text-neutral/25 hover:bg-error/10 hover:text-error transition-colors"
           title="Remove from workspace"
           @click.stop="emit('remove')"
         >
@@ -141,5 +169,16 @@ const parentPopulationName = computed(() => {
 
     <!-- Rendering container -->
     <div ref="plotContainer" class="flex-1 relative min-h-0 bg-base-100"></div>
+
+    <!-- Settings popover (teleported to body) -->
+    <Teleport to="body">
+      <PlotSettingsPopover
+        v-if="settingsPopover.visible"
+        :plot="plot"
+        :x="settingsPopover.x"
+        :y="settingsPopover.y"
+        @close="settingsPopover.visible = false"
+      />
+    </Teleport>
   </div>
 </template>

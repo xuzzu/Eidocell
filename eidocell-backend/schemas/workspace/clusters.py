@@ -87,3 +87,19 @@ class SplitClusterResult(BaseModel):
 class MergeClustersResult(BaseModel):
     new_cluster: ClusterOut
     deleted_cluster_ids: list[str]
+
+
+class ClusterAttributeStatistics(BaseModel):
+    name: str
+    mean: float | None = None
+    std: float | None = None
+    min: float | None = None
+    max: float | None = None
+    median: float | None = None
+
+
+class ClusterStatistics(BaseModel):
+    id: str
+    color: str
+    sample_count: int
+    attributes: list[ClusterAttributeStatistics]
