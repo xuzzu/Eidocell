@@ -4,10 +4,7 @@ Thin orchestrator over the shared pipeline helpers. Runs as a background task
 with progress reporting.
 """
 
-from services._pipeline_utils import project_to_2d
-from services._pipeline_utils import features_cached_for
 import logging
-from pathlib import Path
 
 import numpy as np
 from fastapi import HTTPException
@@ -21,14 +18,17 @@ from core.processors.inference.dimensionality_reduction import (
 from core.processors.inference.feature_extraction import (
     get_processor as get_fe_processor,
 )
+from core.storage import features as lance_features
 from core.task_manager import task_manager
-from core.utils import npy_load, random_color
+from core.utils import random_color
 from models.models import Cluster, Sample, SampleClass
 from services._pipeline_utils import (
     clean_zero_variance,
     compute_quality,
-    extract_features_into,
+    extract_features_to_lance,
+    features_cached_for,
     preload_morphological_masks,
+    project_to_2d,
     resolve_scoped_samples,
     snapshot_samples,
     task_context,
@@ -71,14 +71,13 @@ def run_clustering_pipeline(
         raise HTTPException(status_code=400, detail=str(e))
 
     sample_data = snapshot_samples(samples)
-    masks = preload_morphological_masks(db, sample_data, fe_processor)
+    masks = preload_morphological_masks(session.id, sample_data, fe_processor)
 
     return task_manager.submit(
         name="Clustering pipeline",
         func=_background_pipeline,
         session_id=session_id,
         sample_data=sample_data,
-        session_folder=session.session_folder,
         masks=masks,
         db_url=str(db.get_bind().url),
         feature_method=feature_method,
@@ -94,7 +93,6 @@ def _background_pipeline(
     *,
     session_id: str,
     sample_data: list[dict],
-    session_folder: str,
     masks: dict,
     db_url: str,
     feature_method: str,
@@ -109,27 +107,40 @@ def _background_pipeline(
     """Run the full pipeline in a background thread."""
     fe_processor = get_fe_processor(feature_method)
     feature_dim = fe_processor.feature_dim()
-    features_path = Path(session_folder) / "features" / "session_features.npy"
 
-    # 1: Feature extraction (cache if they already exist)
-    if not features_cached_for(features_path, sample_data, feature_dim):
-        extract_features_into(
+    # 1: Feature extraction (skip if every sample already has features for this method)
+    if not features_cached_for(session_id, feature_method, sample_data):
+        extract_features_to_lance(
             sample_data=sample_data,
             processor=fe_processor,
             masks=masks,
-            features_path=features_path,
+            session_id=session_id,
+            method=feature_method,
             feature_dim=feature_dim,
             on_progress=on_progress,
             is_cancelled=is_cancelled,
         )
 
-    all_features = npy_load(features_path)
-    indices = [s["storage_index"] for s in sample_data]
-    active_features = all_features[indices]
+    # 2: Load aligned vectors for the scoped sample set
+    sample_ids = [s["id"] for s in sample_data]
+    found_ids, active_features = lance_features.load_vectors(
+        session_id, feature_method, sample_ids
+    )
+    if active_features.shape[0] == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No features available for method '{feature_method}'",
+        )
+    found_set = set(found_ids)
+    aligned_data = [sd for sd in sample_data if sd["id"] in found_set]
+    # _load_vectors returns ids in input order subset; sample_data may diverge if
+    # any sample failed extraction. Rebuild aligned_data to match found_ids order.
+    by_id = {sd["id"]: sd for sd in sample_data}
+    aligned_data = [by_id[sid] for sid in found_ids]
 
-    # 2-4: DR → cluster → 2D projection
-    with task_context(on_progress, is_cancelled, total=len(sample_data) + 3) as ctx:
-        ctx.current = len(sample_data)
+    # 3-5: DR → cluster → 2D projection
+    with task_context(on_progress, is_cancelled, total=len(aligned_data) + 3) as ctx:
+        ctx.current = len(aligned_data)
 
         ctx.stage("Reducing dimensionality...", advance=1)
         if dim_reduction_method:
@@ -147,16 +158,15 @@ def _background_pipeline(
         )
         actual_n_clusters = int(labels.max()) + 1
 
-        # Visualization
         ctx.stage("Generating 2D projection...", advance=1)
         embeddings_2d = project_to_2d(features_for_clustering)
 
-    # 5: Save clusters
-    on_progress(len(sample_data) + 3, len(sample_data) + 3, "Saving clusters...")
+    # 6: Save clusters
+    on_progress(len(aligned_data) + 3, len(aligned_data) + 3, "Saving clusters...")
     return _save_clusters(
         db_url=db_url,
         session_id=session_id,
-        sample_data=sample_data,
+        sample_data=aligned_data,
         labels=labels,
         embeddings_2d=embeddings_2d,
         n_clusters=actual_n_clusters,
@@ -182,7 +192,6 @@ def _save_clusters(
             db.delete(c)
         db.commit()
 
-        # "Labeled" excludes the auto-created Uncategorized class.
         uncat = (
             db.query(SampleClass)
             .filter(

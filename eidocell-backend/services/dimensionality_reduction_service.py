@@ -15,8 +15,8 @@ from core.processors.inference.dimensionality_reduction import (
     DR_REGISTRY,
     get_processor,
 )
+from core.storage import features as lance_features
 from core.task_manager import task_manager
-from core.utils import load_session_features
 from services._pipeline_utils import (
     clean_zero_variance,
     task_context,
@@ -32,6 +32,7 @@ def run_dimensionality_reduction(
     method: str,
     n_components: int,
     params: dict,
+    feature_method: str = "mobilenetv3",
 ) -> str:
     """Submit dimensionality reduction as a background task. Returns task_id."""
     try:
@@ -39,7 +40,7 @@ def run_dimensionality_reduction(
     except UnknownProcessorError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    session, samples = validate_session_and_active_samples(db, session_id)
+    _, samples = validate_session_and_active_samples(db, session_id)
     if len(samples) < n_components:
         raise HTTPException(
             status_code=400,
@@ -47,21 +48,17 @@ def run_dimensionality_reduction(
         )
 
     sample_meta = [
-        {
-            "id": s.id,
-            "filename": s.filename,
-            "class_id": s.class_id,
-            "storage_index": s.storage_index,
-        }
+        {"id": s.id, "filename": s.filename, "class_id": s.class_id}
         for s in samples
     ]
 
     return task_manager.submit(
         name=f"Dimensionality reduction ({method})",
         func=_background_dr,
-        session_folder=session.session_folder,
+        session_id=session_id,
         sample_meta=sample_meta,
         method=method,
+        feature_method=feature_method,
         n_components=n_components,
         params=params or {},
     )
@@ -69,9 +66,10 @@ def run_dimensionality_reduction(
 
 def _background_dr(
     *,
-    session_folder: str,
+    session_id: str,
     sample_meta: list[dict],
     method: str,
+    feature_method: str,
     n_components: int,
     params: dict,
     on_progress,
@@ -80,8 +78,17 @@ def _background_dr(
     """Run dimensionality reduction in a background thread."""
     with task_context(on_progress, is_cancelled, total=4) as ctx:
         ctx.stage("Loading features...", advance=1)
-        indices = [s["storage_index"] for s in sample_meta]
-        features = load_session_features(session_folder, indices)
+        sample_ids = [s["id"] for s in sample_meta]
+        found_ids, features = lance_features.load_vectors(
+            session_id, feature_method, sample_ids
+        )
+        if features.shape[0] == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No features available for method '{feature_method}'",
+            )
+        meta_by_id = {s["id"]: s for s in sample_meta}
+        aligned_meta = [meta_by_id[sid] for sid in found_ids]
 
         ctx.stage("Cleaning features...", advance=1)
         features_clean = clean_zero_variance(features, raise_on_all_zero=True)
@@ -94,7 +101,7 @@ def _background_dr(
 
         ctx.stage("Building response...", advance=1)
         result_embeddings = []
-        for i, s in enumerate(sample_meta):
+        for i, s in enumerate(aligned_meta):
             entry = {
                 "sample_id": s["id"],
                 "filename": s["filename"],
@@ -109,7 +116,7 @@ def _background_dr(
     return {
         "method": method,
         "n_components": n_components,
-        "n_samples": len(sample_meta),
+        "n_samples": len(aligned_meta),
         "embeddings": result_embeddings,
     }
 

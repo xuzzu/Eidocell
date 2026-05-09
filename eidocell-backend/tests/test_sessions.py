@@ -206,8 +206,19 @@ def test_delete_session_cascades_clusters_and_plots(client, tmp_path):
         "method": "otsu_intensity",
         "params": {"distance_from_center": 80, "min_component_size": 10},
     })
-    client.post(f"/sessions/{sid}/features/extract", json={"method": "morphological"})
-    client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
+    extract_task = client.post(
+        f"/sessions/{sid}/features/extract", json={"method": "morphological"}
+    ).json()
+    # Feature extraction is async; wait for it before clustering.
+    import time as _time
+    for _ in range(100):
+        status = client.get(f"/tasks/{extract_task['task_id']}").json()["status"]
+        if status in ("completed", "failed", "cancelled"):
+            break
+        _time.sleep(0.05)
+    client.post(f"/sessions/{sid}/clusters/run", json={
+        "n_clusters": 2, "feature_method": "morphological",
+    })
     plot = client.post(f"/sessions/{sid}/analysis/plots", json={
         "chart_type": "histogram", "parameters": {"x_variable": "area"},
     }).json()

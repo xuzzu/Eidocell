@@ -5,11 +5,13 @@ import math
 import random
 import struct
 
+import numpy as np
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from models.models import Sample, SampleClass, Mask, Plot, Gate, Session, sample_clusters
+from core.storage import mask_attrs as lance_mask_attrs
+from models.models import Gate, Plot, Sample, SampleClass, Session, sample_clusters
 from schemas.workspace.analysis import _validate_gate_definition
 
 logger = logging.getLogger("eidocell.analysis")
@@ -88,8 +90,6 @@ def delete_plot(db: DbSession, plot_id: str) -> None:
     if not plot:
         raise HTTPException(status_code=404, detail="Plot not found")
     session_id = plot.session_id
-    # Cascade: every gate created on this plot, plus its hierarchical
-    # descendants, plus any boolean gate that referenced any of them.
     for gate_id in [g.id for g in plot.gates]:
         _delete_gate_subtree(db, gate_id)
     db.delete(plot)
@@ -113,16 +113,13 @@ def _plot_to_out(plot: Plot, gate_count: int) -> dict:
 # ── Plot data ───────────────────────────────────────────────────────────
 
 
-def _query_plot_rows(db: DbSession, plot: Plot, axes: list[str]):
-    """Shared query for plot data: returns list of (sample, mask, class) tuples.
-
-    Returns ALL session samples regardless of is_active so the plot keeps a
-    stable axis range as gates are added. If the plot inherits from a parent
-    gate, results are restricted to that population.
-    """
+def _fetch_plot_rows(
+    db: DbSession, plot: Plot, axes: list[str]
+) -> tuple[list[Sample], dict[str, SampleClass | None], dict[str, dict]]:
+    """Fetch all session samples (or restricted by parent gate) joined with class info,
+    plus per-sample attrs for the requested axes."""
     query = (
-        db.query(Sample, Mask, SampleClass)
-        .join(Mask, Sample.id == Mask.sample_id)
+        db.query(Sample, SampleClass)
         .outerjoin(SampleClass, Sample.class_id == SampleClass.id)
         .filter(Sample.session_id == plot.session_id)
     )
@@ -131,9 +128,13 @@ def _query_plot_rows(db: DbSession, plot: Plot, axes: list[str]):
         if parent:
             parent_ids = _compute_gate_population(db, parent)
             if not parent_ids:
-                return []
+                return [], {}, {}
             query = query.filter(Sample.id.in_(parent_ids))
-    return query.all()
+    rows = query.all()
+    samples = [s for s, _ in rows]
+    class_by_sid = {s.id: cls for s, cls in rows}
+    attrs_by_sid = lance_mask_attrs.get_attrs_bulk(plot.session_id, [s.id for s in samples])
+    return samples, class_by_sid, attrs_by_sid
 
 
 def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
@@ -148,19 +149,17 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
     params = plot.parameters
     chart_type = plot.chart_type
 
-    # Determine which axes we need
     if chart_type == "histogram":
         axes = [params["x_variable"]]
     else:
         axes = [params["x_variable"], params["y_variable"]]
 
     color_var = params.get("color_variable")
-
-    rows = _query_plot_rows(db, plot, axes)
+    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot, axes)
 
     data = []
-    for sample, mask, sample_class in rows:
-        attrs = mask.attributes or {}
+    for sample in samples:
+        attrs = attrs_by_sid.get(sample.id) or {}
         values = {}
         skip = False
         for axis in axes:
@@ -171,15 +170,14 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
                 break
         if skip:
             continue
-
+        cls = class_by_sid.get(sample.id)
         point = {
             "sample_id": sample.id,
             "values": values,
-            "class_name": sample_class.name if sample_class else None,
-            "class_color": sample_class.color if sample_class else None,
+            "class_name": cls.name if cls else None,
+            "class_color": cls.color if cls else None,
             "cluster_ids": [],
         }
-
         if color_var == "cluster":
             cluster_ids = (
                 db.query(sample_clusters.c.cluster_id)
@@ -187,12 +185,9 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
                 .all()
             )
             point["cluster_ids"] = [cid for (cid,) in cluster_ids]
-
         data.append(point)
 
     total = len(data)
-
-    # Downsample for rendering if requested
     if max_points > 0 and total > max_points:
         data = random.sample(data, max_points)
 
@@ -206,17 +201,7 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
 
 
 def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000) -> dict:
-    """Return plot data as binary Float32Arrays + metadata for fast frontend transfer.
-
-    Returns:
-        {
-            "meta": {"plot_id", "chart_type", "axes", "total", "returned"},
-            "sample_ids": [...],
-            "x_data": bytes (float32),
-            "y_data": bytes | None (float32),
-            "colors": [...],  # hex color strings per point
-        }
-    """
+    """Return plot data as binary Float32Arrays + metadata."""
     plot = db.query(Plot).filter(Plot.id == plot_id).first()
     if not plot:
         raise HTTPException(status_code=404, detail="Plot not found")
@@ -229,17 +214,17 @@ def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000
     else:
         axes = [params["x_variable"], params["y_variable"]]
 
-    rows = _query_plot_rows(db, plot, axes)
+    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot, axes)
 
-    sample_ids = []
-    x_vals = []
-    y_vals = []
-    colors = []
+    sample_ids: list[str] = []
+    x_vals: list[float] = []
+    y_vals: list[float] = []
+    colors: list[str] = []
 
-    for sample, mask, sample_class in rows:
-        attrs = mask.attributes or {}
+    for sample in samples:
+        attrs = attrs_by_sid.get(sample.id) or {}
         skip = False
-        axis_values = []
+        axis_values: list[float] = []
         for axis in axes:
             if axis in attrs:
                 axis_values.append(float(attrs[axis]))
@@ -248,16 +233,15 @@ def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000
                 break
         if skip:
             continue
-
         sample_ids.append(sample.id)
         x_vals.append(axis_values[0])
         if len(axis_values) > 1:
             y_vals.append(axis_values[1])
-        colors.append(sample_class.color if sample_class else "#64748b")
+        cls = class_by_sid.get(sample.id)
+        colors.append(cls.color if cls else "#64748b")
 
     total = len(sample_ids)
 
-    # Downsample
     if max_points > 0 and total > max_points:
         indices = random.sample(range(total), max_points)
         indices.sort()
@@ -268,7 +252,6 @@ def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000
         colors = [colors[i] for i in indices]
 
     returned = len(sample_ids)
-
     x_data = struct.pack(f"{returned}f", *x_vals) if x_vals else b""
     y_data = struct.pack(f"{returned}f", *y_vals) if y_vals else None
 
@@ -288,31 +271,18 @@ def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000
 
 
 def batch_plot_data(db: DbSession, plot_ids: list[str], *, max_points: int = 0) -> dict[str, dict]:
-    """Fetch data for multiple plots in a single call.
-
-    Returns a dict mapping plot_id → PlotData dict.
-    """
     result = {}
     for pid in plot_ids:
         try:
             result[pid] = get_plot_data(db, pid, max_points=max_points)
         except HTTPException:
-            continue  # skip missing plots
+            continue
     return result
 
 
 def list_available_parameters(db: DbSession, session_id: str) -> list[str]:
     """Return list of mask attribute names available for plotting."""
-    # Get one mask with attributes to discover available keys
-    mask = (
-        db.query(Mask)
-        .join(Sample, Mask.sample_id == Sample.id)
-        .filter(Sample.session_id == session_id, Mask.attributes.isnot(None))
-        .first()
-    )
-    if not mask or not mask.attributes:
-        return []
-    return sorted(mask.attributes.keys())
+    return sorted(lance_mask_attrs.list_attribute_names(session_id))
 
 
 # ── Gate CRUD ───────────────────────────────────────────────────────────
@@ -334,8 +304,6 @@ def create_gate(
     if not plot:
         raise HTTPException(status_code=404, detail="Plot not found")
 
-    # If the plot itself inherits from a population, gates drawn on it
-    # automatically nest under that parent unless an explicit parent was given.
     if parent_gate_id is None and plot.parent_gate_id is not None:
         parent_gate_id = plot.parent_gate_id
 
@@ -343,9 +311,6 @@ def create_gate(
         parent = db.query(Gate).filter(Gate.id == parent_gate_id).first()
         if not parent:
             raise HTTPException(status_code=404, detail="Parent gate not found")
-        # Boolean parents are allowed: child population becomes
-        # boolean.population ∩ child.filter, which is the natural meaning when a
-        # plot inherits from a boolean and a gate is then drawn on it.
 
     if not name:
         name = f"Gate {gate_type[:4].title()}"
@@ -474,25 +439,16 @@ def update_gate(db: DbSession, gate_id: str, name: str | None, color: str | None
 
     pop = _compute_gate_population(db, gate)
     total = _session_total_samples(db, gate.session_id)
-
-    # Definition or parent change can shift populations of this gate, its
-    # descendants, and any boolean depending on it. Refresh the active-sample
-    # mirror so the gallery view tracks the selected gate's new population
-    # without forcing a manual reselection.
     _update_active_samples(db, gate.session_id)
-
     return _gate_to_out(gate, len(pop), total)
 
 
 def _delete_gate_subtree(db: DbSession, gate_id: str) -> set[str]:
-    """Delete a gate, its hierarchical descendants, and any boolean gate that
-    transitively references any of them. Returns the set of deleted gate IDs."""
     gate = db.query(Gate).filter(Gate.id == gate_id).first()
     if not gate:
         return set()
     session_id = gate.session_id
 
-    # BFS hierarchical descendants.
     to_delete: set[str] = {gate.id}
     frontier: list[str] = [gate.id]
     while frontier:
@@ -505,7 +461,6 @@ def _delete_gate_subtree(db: DbSession, gate_id: str) -> set[str]:
         to_delete.update(next_frontier)
         frontier = next_frontier
 
-    # Iterate to fixed point: any boolean gate referencing a doomed gate also dies.
     while True:
         booleans = (
             db.query(Gate)
@@ -541,7 +496,6 @@ def delete_gate(db: DbSession, gate_id: str) -> None:
 
 
 def get_gate_population(db: DbSession, gate_id: str) -> list[str]:
-    """Return sample IDs that fall within a gate."""
     gate = db.query(Gate).filter(Gate.id == gate_id).first()
     if not gate:
         raise HTTPException(status_code=404, detail="Gate not found")
@@ -579,7 +533,6 @@ def _compute_gate_population(
 
     Hierarchical gate: parent population (recursive) intersected with this gate's
     geometric filter. Boolean gate: AND/OR of two source gates' populations.
-    `_seen` tracks gates currently being evaluated up-stack to break cycles.
     """
     seen = (_seen or set()) | {gate.id}
 
@@ -597,10 +550,6 @@ def _compute_gate_population(
             return list(pop_a & pop_b)
         return list(pop_a | pop_b)
 
-    axes = gate.parameters
-    gate_type = gate.gate_type
-    defn = gate.definition
-
     parent_ids: set[str] | None = None
     if gate.parent_gate_id and gate.parent_gate_id not in seen:
         parent_gate = db.query(Gate).filter(Gate.id == gate.parent_gate_id).first()
@@ -609,91 +558,113 @@ def _compute_gate_population(
             if not parent_ids:
                 return []
 
-    # Population evaluation must NOT depend on Sample.is_active — that field
-    # mirrors the currently-selected population, so filtering by it would make
-    # every other gate's count shrink to "samples also in the selection."
-    query = (
-        db.query(Sample.id, Mask.attributes)
-        .join(Mask, Sample.id == Mask.sample_id)
-        .filter(Sample.session_id == gate.session_id)
-    )
+    # Limit candidate set to samples in this session (and parent gate, if any)
+    sample_q = db.query(Sample.id).filter(Sample.session_id == gate.session_id)
     if parent_ids is not None:
-        query = query.filter(Sample.id.in_(parent_ids))
+        sample_q = sample_q.filter(Sample.id.in_(parent_ids))
+    candidate_ids = [sid for (sid,) in sample_q.all()]
+    if not candidate_ids:
+        return []
 
-    matching_ids: list[str] = []
-    for sample_id, attrs in query.all():
-        if not attrs:
-            continue
-        vals = []
-        skip = False
-        for axis in axes:
-            if axis in attrs:
-                vals.append(attrs[axis])
-            else:
-                skip = True
-                break
-        if skip:
-            continue
-
-        if _point_in_gate(gate_type, defn, vals):
-            matching_ids.append(sample_id)
-
-    return matching_ids
+    return _evaluate_geometric_gate(gate, candidate_ids)
 
 
-def _point_in_gate(gate_type: str, definition: dict, values: list[float]) -> bool:
+def _evaluate_geometric_gate(gate: Gate, candidate_ids: list[str]) -> list[str]:
+    axes = list(gate.parameters or [])
+    gate_type = gate.gate_type
+    defn = gate.definition or {}
+    valid_columns = set(lance_mask_attrs.ATTRIBUTE_NAMES)
+    for axis in axes:
+        if axis not in valid_columns:
+            return []
+
     if gate_type == "interval":
-        return definition["min"] <= values[0] <= definition["max"]
+        axis = axes[0]
+        lo = float(defn["min"])
+        hi = float(defn["max"])
+        where = f"{axis} BETWEEN {lo} AND {hi}"
+        return lance_mask_attrs.query_predicate(
+            gate.session_id, where, sample_ids=candidate_ids
+        )
 
-    elif gate_type == "rectangular":
-        x, y = values[0], values[1]
-        rx, ry = definition["x"], definition["y"]
-        rw, rh = definition["width"], definition["height"]
-        return rx <= x <= rx + rw and ry <= y <= ry + rh
+    if gate_type == "rectangular":
+        ax_x, ax_y = axes[0], axes[1]
+        x = float(defn["x"]); y = float(defn["y"])
+        w = float(defn["width"]); h = float(defn["height"])
+        where = (
+            f"{ax_x} BETWEEN {x} AND {x + w} "
+            f"AND {ax_y} BETWEEN {y} AND {y + h}"
+        )
+        return lance_mask_attrs.query_predicate(
+            gate.session_id, where, sample_ids=candidate_ids
+        )
 
-    elif gate_type == "polygon":
-        x, y = values[0], values[1]
-        vertices = definition["vertices"]
-        return _point_in_polygon(x, y, vertices)
+    if gate_type == "quadrant":
+        ax_x, ax_y = axes[0], axes[1]
+        xt = float(defn["x_threshold"]); yt = float(defn["y_threshold"])
+        where = f"{ax_x} >= {xt} AND {ax_y} >= {yt}"
+        return lance_mask_attrs.query_predicate(
+            gate.session_id, where, sample_ids=candidate_ids
+        )
 
-    elif gate_type == "ellipse":
-        x, y = values[0], values[1]
-        cx, cy = definition["cx"], definition["cy"]
-        rx, ry = definition["rx"], definition["ry"]
-        angle = math.radians(definition.get("angle", 0))
-        dx, dy = x - cx, y - cy
+    if gate_type == "ellipse":
+        ax_x, ax_y = axes[0], axes[1]
+        sids, cols = lance_mask_attrs.fetch_columns(
+            gate.session_id, [ax_x, ax_y], sample_ids=candidate_ids
+        )
+        if not sids:
+            return []
+        cx = float(defn["cx"]); cy = float(defn["cy"])
+        rx = float(defn["rx"]); ry = float(defn["ry"])
+        angle = math.radians(defn.get("angle", 0))
         cos_a, sin_a = math.cos(angle), math.sin(angle)
+        dx = cols[ax_x] - cx
+        dy = cols[ax_y] - cy
         nx = cos_a * dx + sin_a * dy
         ny = -sin_a * dx + cos_a * dy
-        return (nx / rx) ** 2 + (ny / ry) ** 2 <= 1
+        mask = (nx / rx) ** 2 + (ny / ry) ** 2 <= 1
+        return [sid for sid, m in zip(sids, mask) if m]
 
-    elif gate_type == "quadrant":
-        x, y = values[0], values[1]
-        # Default: Q1 (upper-right) — x > threshold AND y > threshold
-        return x >= definition["x_threshold"] and y >= definition["y_threshold"]
+    if gate_type == "polygon":
+        ax_x, ax_y = axes[0], axes[1]
+        sids, cols = lance_mask_attrs.fetch_columns(
+            gate.session_id, [ax_x, ax_y], sample_ids=candidate_ids
+        )
+        if not sids:
+            return []
+        vertices = defn.get("vertices") or []
+        if len(vertices) < 3:
+            return []
+        return _polygon_contains_vec(sids, cols[ax_x], cols[ax_y], vertices)
 
-    return False
+    return []
 
 
-def _point_in_polygon(x: float, y: float, vertices: list[list[float]]) -> bool:
-    """Ray-casting algorithm for point-in-polygon test."""
+def _polygon_contains_vec(
+    sample_ids: list[str], xs: np.ndarray, ys: np.ndarray, vertices: list[list[float]]
+) -> list[str]:
+    """Vectorized ray-casting point-in-polygon."""
     n = len(vertices)
-    inside = False
+    inside = np.zeros(xs.shape[0], dtype=bool)
     j = n - 1
     for i in range(n):
         xi, yi = vertices[i]
         xj, yj = vertices[j]
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
-            inside = not inside
+        cond1 = (yi > ys) != (yj > ys)
+        denom = (yj - yi)
+        denom_safe = np.where(denom == 0, 1.0, denom)
+        x_intersect = (xj - xi) * (ys - yi) / denom_safe + xi
+        cond2 = xs < x_intersect
+        flip = cond1 & cond2 & (denom != 0)
+        inside ^= flip
         j = i
-    return inside
+    return [sid for sid, m in zip(sample_ids, inside.tolist()) if m]
 
 
 # ── Active samples filtering ───────────────────────────────────────────
 
 
 def _clear_selection_if_dangling(db: DbSession, session_id: str) -> None:
-    """Null out Session.selected_gate_id if the referenced gate no longer exists."""
     sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess or sess.selected_gate_id is None:
         return
@@ -704,8 +675,6 @@ def _clear_selection_if_dangling(db: DbSession, session_id: str) -> None:
 
 
 def _update_active_samples(db: DbSession, session_id: str) -> None:
-    """Set Sample.is_active to mirror the selected gate's population, or all
-    samples active when no gate is selected."""
     sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess:
         return
@@ -736,8 +705,6 @@ def _update_active_samples(db: DbSession, session_id: str) -> None:
 
 
 def select_population(db: DbSession, session_id: str, gate_id: str | None) -> dict:
-    """Set the session's selected gate (or clear with None) and refresh
-    Sample.is_active to mirror its population."""
     sess = db.query(Session).filter(Session.id == session_id).first()
     if not sess:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -765,7 +732,6 @@ def get_selected_population(db: DbSession, session_id: str) -> dict:
 
 
 def get_active_sample_ids(db: DbSession, session_id: str) -> list[str]:
-    """Return IDs of currently active samples."""
     rows = (
         db.query(Sample.id)
         .filter(Sample.session_id == session_id, Sample.is_active == True)
@@ -775,7 +741,6 @@ def get_active_sample_ids(db: DbSession, session_id: str) -> list[str]:
 
 
 def reset_active_samples(db: DbSession, session_id: str) -> int:
-    """Clear the selected population so all samples become active again."""
     select_population(db, session_id, None)
     return (
         db.query(func.count(Sample.id))
@@ -785,15 +750,10 @@ def reset_active_samples(db: DbSession, session_id: str) -> int:
     )
 
 
-# ── Population tree ──────────���────────────────────────────────────────
+# ── Population tree ─────────────────────────────────────────────────────
 
 
 def get_population_tree(db: DbSession, session_id: str) -> dict:
-    """Return the full population tree for a session.
-
-    Shape: { root: <synthetic 'All Events' node with children>, booleans: [...] }
-    Hierarchical gates nest under root; boolean gates are returned in a flat list.
-    """
     all_gates = db.query(Gate).filter(Gate.session_id == session_id).all()
     total = _session_total_samples(db, session_id)
 

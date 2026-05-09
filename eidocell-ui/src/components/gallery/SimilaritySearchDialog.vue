@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { X } from 'lucide-vue-next'
 import { useSessionStore } from '@/stores/session'
 import { useGalleryStore } from '@/stores/gallery'
+import { useSettingsStore } from '@/stores/settings'
 import { searchSimilar } from '@/api/similarity'
 import { assignSamplesToClass } from '@/api/gallery'
 import { ApiError } from '@/api/client'
@@ -17,6 +18,7 @@ import GalleryContextMenu from '@/components/gallery/GalleryContextMenu.vue'
 
 const sessionStore = useSessionStore()
 const gallery = useGalleryStore()
+const settings = useSettingsStore()
 const sid = computed(() => sessionStore.currentSessionId!)
 
 const dialogRef = ref<HTMLDialogElement>()
@@ -69,6 +71,7 @@ async function runSearch() {
     result.value = await searchSimilar(sid.value, {
       reference_sample_ids: referenceSampleIds.value,
       filter_mode: filter.value,
+      feature_method: settings.settings?.default_feature_method,
       top_k: TOP_K,
     })
     // Drop selections that fell out of the new result set

@@ -7,8 +7,20 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy import func
 
 from core.config import SESSIONS_DIR, SUPPORTED_IMAGE_EXTENSIONS
+from core.storage import lance as lance_store
+from core.storage import mask_attrs
 from models.models import Session, Sample, SampleClass
 from schemas.sessions import SessionCreate, SessionUpdate
+
+
+# Subdirectories created under each session folder.
+_SESSION_SUBDIRS = (
+    "masks",
+    "previews",
+    "previews/thumbnails",
+    "previews/overlays",
+    "previews/collages",
+)
 
 
 def _sanitize_folder_name(name: str) -> str:
@@ -56,13 +68,17 @@ def create_session(db: DbSession, data: SessionCreate) -> Session:
     db.add(session)
     db.flush()  # generate id
 
-    # Create session folder
+    # Create session folder + standard subdirs
     folder_name = f"{_sanitize_folder_name(data.name)}_{session.id}"
     session_folder = SESSIONS_DIR / folder_name
     session_folder.mkdir(parents=True, exist_ok=True)
-    for sub in ("features", "masks", "masked_images", "thumbnails"):
-        (session_folder / sub).mkdir(exist_ok=True)
+    for sub in _SESSION_SUBDIRS:
+        (session_folder / sub).mkdir(parents=True, exist_ok=True)
     session.session_folder = str(session_folder)
+
+    # Pre-create the per-session mask_attrs Lance table (fixed schema).
+    # The features table is created lazily during extraction (dim is method-specific).
+    mask_attrs._ensure_table(session.id)  # noqa: SLF001 - intentional internal use
 
     # Create default "Uncategorized" class
     uncategorized = SampleClass(
@@ -74,12 +90,11 @@ def create_session(db: DbSession, data: SessionCreate) -> Session:
     db.flush()
 
     # Create sample records
-    for idx, filename in enumerate(image_files):
+    for filename in image_files:
         sample = Sample(
             session_id=session.id,
             filename=filename,
             path=str(images_dir / filename),
-            storage_index=idx,
             class_id=uncategorized.id,
         )
         db.add(sample)
@@ -123,7 +138,11 @@ def delete_session(db: DbSession, session_id: str) -> None:
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Remove session folder from disk
+    # Drop Lance tables before the session row goes away so we can still
+    # reference session_id for the table names.
+    lance_store.drop_session_tables(session_id)
+
+    # Remove session folder from disk (masks + previews live here)
     session_folder = Path(session.session_folder)
     if session_folder.exists():
         shutil.rmtree(session_folder)

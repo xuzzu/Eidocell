@@ -49,6 +49,7 @@ def run_dim_reduction(
 ):
     """Submit dimensionality reduction as a background task. Returns task_id."""
     task_id = dimensionality_reduction_service.run_dimensionality_reduction(
-        db, session_id, data.method, data.n_components, data.params
+        db, session_id, data.method, data.n_components, data.params,
+        feature_method=data.feature_method,
     )
     return {"task_id": task_id}

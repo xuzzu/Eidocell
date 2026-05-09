@@ -2,11 +2,16 @@ import logging
 import os
 from pathlib import Path
 
+# Bumped on storage-layer breaking changes; see main.py wipe logic.
+STORAGE_VERSION = 2
+
 # Root directory for all eidocell data
 EIDOCELL_HOME = Path(os.environ.get("EIDOCELL_HOME", Path.home() / ".eidocell"))
 SESSIONS_DIR = EIDOCELL_HOME / "sessions"
+LANCE_DIR = EIDOCELL_HOME / "lance"
 DATABASE_PATH = EIDOCELL_HOME / "eidocell.db"
 DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+STORAGE_VERSION_FILE = EIDOCELL_HOME / "storage_version"
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"}
 
@@ -15,6 +20,7 @@ MODELS_DIR = EIDOCELL_HOME / "models"
 # Ensure directories exist
 EIDOCELL_HOME.mkdir(parents=True, exist_ok=True)
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+LANCE_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 

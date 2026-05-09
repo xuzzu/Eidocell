@@ -225,9 +225,10 @@ def test_feature_extraction_async(client, session_for_tasks):
     assert data["status"] == "completed"
     assert data["result"]["processed"] == 5
 
-    # Verify features file exists
-    features_path = Path(session_for_tasks["session_folder"]) / "features" / "session_features.npy"
-    assert features_path.exists()
+    # Verify features were written to Lance
+    from core.storage import features as lance_features
+    sids, _ = lance_features.load_all_vectors(sid, "morphological")
+    assert len(sids) == 5
 
 
 def test_task_progress_tracking(client, session_for_tasks):

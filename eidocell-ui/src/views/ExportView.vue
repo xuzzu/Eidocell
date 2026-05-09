@@ -10,6 +10,7 @@ const outputDirectory = ref('')
 const includeClasses = ref(true)
 const includeClusters = ref(true)
 const includeMasks = ref(true)
+const includeBinaryMasks = ref(false)
 const includeCsv = ref(true)
 const exporting = ref(false)
 const result = ref<ExportResult | null>(null)
@@ -35,6 +36,7 @@ async function run() {
       include_classes: includeClasses.value,
       include_clusters: includeClusters.value,
       include_masks: includeMasks.value,
+      include_binary_masks: includeBinaryMasks.value,
       include_csv: includeCsv.value,
     })
   } catch (e: any) {
@@ -83,7 +85,11 @@ async function run() {
             </label>
             <label class="flex items-center gap-3 cursor-pointer group">
               <input v-model="includeMasks" type="checkbox" class="checkbox checkbox-sm rounded-[2px] border-neutral/30 group-hover:border-neutral checked:bg-neutral transition-colors" />
-              <span class="text-xs font-mono font-bold text-neutral">MASKS <span class="text-neutral/40 font-normal">(binary PNGs)</span></span>
+              <span class="text-xs font-mono font-bold text-neutral">MASKS <span class="text-neutral/40 font-normal">(overlay previews)</span></span>
+            </label>
+            <label class="flex items-center gap-3 cursor-pointer group">
+              <input v-model="includeBinaryMasks" type="checkbox" class="checkbox checkbox-sm rounded-[2px] border-neutral/30 group-hover:border-neutral checked:bg-neutral transition-colors" />
+              <span class="text-xs font-mono font-bold text-neutral">BINARY MASKS <span class="text-neutral/40 font-normal">(raw 0/255 PNGs)</span></span>
             </label>
             <label class="flex items-center gap-3 cursor-pointer group">
               <input v-model="includeCsv" type="checkbox" class="checkbox checkbox-sm rounded-[2px] border-neutral/30 group-hover:border-neutral checked:bg-neutral transition-colors" />
@@ -108,10 +114,11 @@ async function run() {
         <CheckCircle class="w-5 h-5 stroke-[1.5px]" />
         <div>
           <p class="font-bold uppercase tracking-wider text-xs">Export complete</p>
-          <p class="text-[10px] mt-1 text-success-content/80">
+          <p class="text-xs mt-1 text-success-content/80">
             CLASSES: {{ result.classes_exported }} |
             CLUSTERS: {{ result.clusters_exported }} |
             MASKS: {{ result.masks_exported }} |
+            BINARY MASKS: {{ result.binary_masks_exported }} |
             CSV ROWS: {{ result.csv_rows }}
           </p>
         </div>

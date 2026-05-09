@@ -1,9 +1,11 @@
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
-from pathlib import Path
 from PIL import Image
+
+from core.storage import features as lance_features
 
 
 def _create_test_image(path: Path, size=(100, 100)):
@@ -134,27 +136,25 @@ def test_run_feature_extraction_no_masks(client, tmp_path):
 
 def test_features_file_created(client, session_with_masks):
     sid = session_with_masks["id"]
-    _run_extract(client, sid, {})
+    _run_extract(client, sid, {"method": "morphological"})
 
-    session_folder = session_with_masks["session_folder"]
-    features_path = Path(session_folder) / "features" / "session_features.npy"
-    assert features_path.exists()
-    # Temp file should be cleaned up after success
-    assert not features_path.with_suffix(features_path.suffix + ".tmp").exists()
-
-    features = np.load(features_path)
-    assert features.ndim == 2
-    assert features.shape[1] == 15
+    # Verify Lance has 10 rows for morphological in this session
+    sample_ids, vectors = lance_features.load_all_vectors(sid, "morphological")
+    assert len(sample_ids) == 10
+    assert vectors.ndim == 2
+    assert vectors.shape[1] == 15
 
 
 def test_clustering_works_after_extraction(client, session_with_masks):
     """End-to-end: segmentation → feature extraction → clustering."""
     sid = session_with_masks["id"]
 
-    task = _run_extract(client, sid, {})
+    task = _run_extract(client, sid, {"method": "morphological"})
     assert task["status"] == "completed"
 
-    resp = client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
+    resp = client.post(f"/sessions/{sid}/clusters/run", json={
+        "n_clusters": 2, "feature_method": "morphological",
+    })
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["clusters"]) == 2
@@ -178,9 +178,11 @@ def test_list_dim_reduction_methods(client, session_with_masks):
 
 def test_run_pca_2d(client, session_with_masks):
     sid = session_with_masks["id"]
-    _run_extract(client, sid, {})
+    _run_extract(client, sid, {"method": "morphological"})
 
-    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    task = _run_dim_reduction(client, sid, {
+        "method": "pca", "n_components": 2, "feature_method": "morphological",
+    })
     assert task["status"] == "completed"
     result = task["result"]
     assert result["method"] == "pca"
@@ -198,9 +200,11 @@ def test_run_pca_2d(client, session_with_masks):
 
 def test_run_pca_3d(client, session_with_masks):
     sid = session_with_masks["id"]
-    _run_extract(client, sid, {})
+    _run_extract(client, sid, {"method": "morphological"})
 
-    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 3})
+    task = _run_dim_reduction(client, sid, {
+        "method": "pca", "n_components": 3, "feature_method": "morphological",
+    })
     assert task["status"] == "completed"
     result = task["result"]
     assert result["n_components"] == 3
@@ -210,21 +214,14 @@ def test_run_pca_3d(client, session_with_masks):
 def test_run_dim_reduction_no_features(client, session_with_masks):
     """Dim reduction without feature extraction should fail."""
     sid = session_with_masks["id"]
-
-    session_folder = session_with_masks["session_folder"]
-    features_path = Path(session_folder) / "features" / "session_features.npy"
-    if features_path.exists():
-        features_path.unlink()
-
+    # No extraction has run; Lance has no features for any method.
     task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
-    # The task fails because load_session_features raises HTTPException(400),
-    # which surfaces in the worker as a generic exception → status "failed".
     assert task["status"] == "failed"
 
 
 def test_run_dim_reduction_unknown_method(client, session_with_masks):
     sid = session_with_masks["id"]
-    _run_extract(client, sid, {})
+    _run_extract(client, sid, {"method": "morphological"})
 
     resp = client.post(f"/sessions/{sid}/features/dim-reduction/run", json={
         "method": "nonexistent",
@@ -236,9 +233,11 @@ def test_run_dim_reduction_unknown_method(client, session_with_masks):
 def test_embeddings_contain_class_info(client, session_with_masks):
     """Embeddings should include class_id for coloring in the UI."""
     sid = session_with_masks["id"]
-    _run_extract(client, sid, {})
+    _run_extract(client, sid, {"method": "morphological"})
 
-    task = _run_dim_reduction(client, sid, {"method": "pca", "n_components": 2})
+    task = _run_dim_reduction(client, sid, {
+        "method": "pca", "n_components": 2, "feature_method": "morphological",
+    })
     assert task["status"] == "completed"
     assert "class_id" in task["result"]["embeddings"][0]
 

@@ -21,3 +21,18 @@ export interface ClassStatistics {
   sample_count: number
   attributes: AttributeStatistics[]
 }
+
+export interface AttributeDistribution {
+  name: string
+  bin_edges: number[]
+  bin_counts: number[]
+  min?: number | null
+  max?: number | null
+  mean?: number | null
+  std?: number | null
+}
+
+export interface SessionDistributions {
+  sample_count: number
+  attributes: AttributeDistribution[]
+}

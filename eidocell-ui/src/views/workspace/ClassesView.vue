@@ -3,9 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { Plus, Trash2, Tag, ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { useClassesStore } from '@/stores/classes'
 import { useSessionStore } from '@/stores/session'
-import { classPreviewUrl, getClassStatistics, getClassSamples } from '@/api/classes'
-import type { ClassStatistics } from '@/types'
+import { classPreviewUrl, getClassStatistics, getClassSamples, getSessionDistributions } from '@/api/classes'
+import type { ClassStatistics, SessionDistributions, AttributeDistribution } from '@/types'
 import ClassFormDialog from '@/components/classes/ClassFormDialog.vue'
+import AttributeMiniHistogram from '@/components/classes/AttributeMiniHistogram.vue'
 import TrainingPanel from '@/components/classes/TrainingPanel.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -26,6 +27,12 @@ const previewCacheBuster = ref(Date.now())
 // Expandable rows
 const expandedClassIds = ref<Set<string>>(new Set())
 const classStats = ref<Map<string, ClassStatistics>>(new Map())
+const sessionDistributions = ref<SessionDistributions | null>(null)
+const distByName = computed<Map<string, AttributeDistribution>>(() => {
+  const m = new Map<string, AttributeDistribution>()
+  for (const a of sessionDistributions.value?.attributes ?? []) m.set(a.name, a)
+  return m
+})
 
 onMounted(() => {
   classesStore.fetchClasses()
@@ -76,6 +83,13 @@ async function toggleExpand(classId: string) {
         classStats.value.set(classId, stats)
       } catch {
         // silently fail — expanded row will show no data
+      }
+    }
+    if (!sessionDistributions.value) {
+      try {
+        sessionDistributions.value = await getSessionDistributions(sid.value)
+      } catch {
+        // distribution overlay is optional — leave null
       }
     }
   }
@@ -174,9 +188,16 @@ function formatAttrName(name: string): string {
                       class="p-2 bg-base-100 border border-base-300 rounded-[2px]"
                     >
                       <div class="text-[9px] font-bold tracking-widest uppercase text-neutral/50">{{ formatAttrName(attr.name) }}</div>
-                      <div v-if="attr.mean != null" class="text-xs font-mono font-bold mt-1">{{ attr.mean.toFixed(2) }}</div>
-                      <div v-if="attr.std != null" class="text-[9px] font-mono text-neutral/40">&plusmn; {{ attr.std.toFixed(2) }}</div>
-                      <div v-if="attr.mean == null" class="text-[9px] font-mono text-neutral/30 mt-1">N/A</div>
+                      <div v-if="attr.mean != null" class="text-sm font-mono font-bold mt-1">{{ attr.mean.toFixed(2) }}</div>
+                      <div v-if="attr.std != null" class="text-[10px] font-mono text-neutral/40">&plusmn; {{ attr.std.toFixed(2) }}</div>
+                      <div v-if="attr.mean == null" class="text-[10px] font-mono text-neutral/30 mt-1">N/A</div>
+                      <div class="mt-1 text-neutral/70" :title="`Class mean within session distribution`">
+                        <AttributeMiniHistogram
+                          :distribution="distByName.get(attr.name)"
+                          :value-marker="attr.mean"
+                          :marker-color="cls.color"
+                        />
+                      </div>
                     </div>
                   </div>
                 </td>

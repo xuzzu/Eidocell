@@ -1,12 +1,11 @@
 """Feature extraction service: build feature vectors from mask attributes or images.
 
 Single async entrypoint — extraction always runs as a background task and is
-streamed to disk through a memmap so RSS stays bounded and a cancel cleans up
-the in-flight temp file.
+streamed into the per-session LanceDB features table in batches so RSS stays
+bounded and a cancel cleans up cleanly (Lance MVCC drops in-flight batches).
 """
 
 import logging
-from pathlib import Path
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session as DbSession
@@ -18,7 +17,7 @@ from core.processors.inference.feature_extraction import (
 )
 from core.task_manager import task_manager
 from services._pipeline_utils import (
-    extract_features_into,
+    extract_features_to_lance,
     preload_morphological_masks,
     snapshot_samples,
     validate_session_and_active_samples,
@@ -38,14 +37,14 @@ def run_feature_extraction(
 
     session, samples = validate_session_and_active_samples(db, session_id)
     sample_data = snapshot_samples(samples)
-    masks = preload_morphological_masks(db, sample_data, processor)
+    masks = preload_morphological_masks(session.id, sample_data, processor)
 
     return task_manager.submit(
         name=f"Feature extraction ({method})",
         func=_background_extract,
         method=method,
         sample_data=sample_data,
-        session_folder=session.session_folder,
+        session_id=session.id,
         masks=masks,
     )
 
@@ -54,7 +53,7 @@ def _background_extract(
     *,
     method: str,
     sample_data: list[dict],
-    session_folder: str,
+    session_id: str,
     masks: dict,
     on_progress,
     is_cancelled=None,
@@ -62,13 +61,13 @@ def _background_extract(
     """Run feature extraction in a background thread."""
     processor = get_processor(method)
     feature_dim = processor.feature_dim()
-    features_path = Path(session_folder) / "features" / "session_features.npy"
 
-    processed, skipped = extract_features_into(
+    processed, skipped = extract_features_to_lance(
         sample_data=sample_data,
         processor=processor,
         masks=masks,
-        features_path=features_path,
+        session_id=session_id,
+        method=method,
         feature_dim=feature_dim,
         on_progress=on_progress,
         is_cancelled=is_cancelled,

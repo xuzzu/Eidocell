@@ -1,4 +1,4 @@
-"""Cosine similarity search against a centroid of reference samples."""
+"""Cosine similarity search against a centroid of reference samples (LanceDB-backed)."""
 
 import math
 
@@ -6,8 +6,8 @@ import numpy as np
 from fastapi import HTTPException
 from sqlalchemy.orm import Session as DbSession
 
-from core.utils import load_session_features
-from models.models import Mask, Sample, SampleClass, Session
+from core.storage import features as lance_features
+from models.models import Mask, Sample, SampleClass
 from schemas.workspace.similarity import (
     SimilarityFilter,
     SimilarityHit,
@@ -28,6 +28,8 @@ class _Scope:
 def search(
     db: DbSession, session_id: str, req: SimilaritySearchRequest
 ) -> SimilaritySearchResponse:
+    method = req.feature_method
+
     # 1. Validate references
     refs = (
         db.query(Sample)
@@ -46,33 +48,39 @@ def search(
 
     # 2. Resolve candidate scope (also validates session exists)
     scope_mode = "unlabeled" if req.filter_mode == SimilarityFilter.UNLABELED else "all"
-    session, candidates = resolve_scoped_samples(db, session_id, _Scope(scope_mode))
+    _, candidates = resolve_scoped_samples(db, session_id, _Scope(scope_mode))
 
-    # 3. Load embeddings (raises 400 with friendly message if missing)
-    features = load_session_features(session.session_folder, indices=None)
-
-    # 4. Build reference centroid
-    ref_indices = [s.storage_index for s in refs if s.storage_index < features.shape[0]]
-    if not ref_indices:
+    # 3. Load reference vectors and build centroid
+    ref_ids, ref_matrix = lance_features.load_vectors(
+        session_id, method, [s.id for s in refs]
+    )
+    if ref_matrix.shape[0] == 0:
         raise HTTPException(
             status_code=400,
             detail="Reference samples have no extracted features",
         )
-    ref_vec = features[ref_indices].mean(axis=0)
-    ref_norm = np.linalg.norm(ref_vec)
+    ref_vec = ref_matrix.mean(axis=0)
+    ref_norm = float(np.linalg.norm(ref_vec))
     if ref_norm == 0:
         raise HTTPException(
             status_code=400,
             detail="Reference centroid is zero vector; cannot compute similarity",
         )
-    ref_unit = ref_vec / ref_norm
 
-    # 5. Filter candidates: exclude refs, exclude any without a feature row
+    # 4. Restrict candidate set to ones that have features for this method
     ref_id_set = set(req.reference_sample_ids)
-    cand_samples = [
-        s for s in candidates
-        if s.id not in ref_id_set and s.storage_index < features.shape[0]
-    ]
+    cand_pool = [s for s in candidates if s.id not in ref_id_set]
+    if not cand_pool:
+        return SimilaritySearchResponse(
+            reference_sample_ids=req.reference_sample_ids,
+            total_candidates=0,
+            returned=0,
+            hits=[],
+        )
+
+    cand_ids = [s.id for s in cand_pool]
+    have_ids = lance_features.has_method(session_id, method, cand_ids)
+    cand_samples = [s for s in cand_pool if s.id in have_ids]
     if not cand_samples:
         return SimilaritySearchResponse(
             reference_sample_ids=req.reference_sample_ids,
@@ -81,26 +89,31 @@ def search(
             hits=[],
         )
 
-    cand_indices = np.array([s.storage_index for s in cand_samples], dtype=np.int64)
-    cand_features = features[cand_indices]
-    cand_norms = np.linalg.norm(cand_features, axis=1)
-    # Avoid divide-by-zero; zero-norm rows get similarity 0
-    safe_norms = np.where(cand_norms > 0, cand_norms, 1.0)
-    sims = (cand_features @ ref_unit) / safe_norms
-    sims = np.where(cand_norms > 0, sims, 0.0)
-    pcts = np.clip(sims, 0.0, 1.0) * 100.0
+    # 5. Lance cosine search restricted to candidate ids
+    hits_raw = lance_features.cosine_search(
+        session_id,
+        method,
+        ref_vec,
+        k=req.top_k,
+        candidate_sample_ids=[s.id for s in cand_samples],
+    )
 
-    # 6. Threshold + sort desc + top_k
-    keep_mask = pcts >= req.min_similarity_pct
-    kept_idx = np.where(keep_mask)[0]
-    order = kept_idx[np.argsort(-pcts[kept_idx])]
+    # cosine sim in [-1, 1] → percent in [0, 100] (negative similarity → 0)
+    sample_by_id = {s.id: s for s in cand_samples}
+    filtered: list[tuple[Sample, float]] = []
+    for sid, sim in hits_raw:
+        s = sample_by_id.get(sid)
+        if s is None:
+            continue
+        pct = max(0.0, min(1.0, sim)) * 100.0
+        if pct < req.min_similarity_pct:
+            continue
+        filtered.append((s, pct))
+
     if req.top_k is not None:
-        order = order[: req.top_k]
+        filtered = filtered[: req.top_k]
 
-    top_samples = [cand_samples[i] for i in order]
-    top_pcts = pcts[order]
-
-    # 7. Batch-fetch class + mask info for the result page
+    top_samples = [s for s, _ in filtered]
     top_ids = [s.id for s in top_samples]
     class_ids = {s.class_id for s in top_samples if s.class_id}
     classes_by_id = {
@@ -114,13 +127,12 @@ def search(
     )
 
     hits: list[SimilarityHit] = []
-    for sample, pct in zip(top_samples, top_pcts):
+    for sample, pct in filtered:
         cls = classes_by_id.get(sample.class_id) if sample.class_id else None
         sample_dict = {
             "id": sample.id,
             "filename": sample.filename,
             "path": sample.path,
-            "storage_index": sample.storage_index,
             "is_active": sample.is_active,
             "class_id": sample.class_id,
             "class_name": cls.name if cls else None,

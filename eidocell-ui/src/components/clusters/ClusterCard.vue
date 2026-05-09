@@ -94,7 +94,7 @@ function onSplitConfirm() {
       >
         <div class="flex items-center justify-between">
           <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/50">Split into</span>
-          <span class="text-[10px] font-mono font-bold">{{ splitCount }}</span>
+          <span class="text-xs font-mono font-bold">{{ splitCount }}</span>
         </div>
         <input
           v-model.number="splitCount"
@@ -113,7 +113,7 @@ function onSplitConfirm() {
 
       <div class="flex items-center gap-2">
         <span class="w-3 h-3 rounded-[2px]" :style="{ backgroundColor: cluster.color }"></span>
-        <span class="flex items-center gap-1.5 text-[10px] font-mono font-bold tracking-widest text-neutral/70">
+        <span class="flex items-center gap-1.5 text-xs font-mono font-bold tracking-widest text-neutral/70">
           <Users class="w-3.5 h-3.5 stroke-[2px]" />
           {{ cluster.sample_count }}
         </span>
@@ -121,7 +121,7 @@ function onSplitConfirm() {
         <!-- % Labeled badge — shown when any samples have a real (non-Uncategorized) class -->
         <span
           v-if="cluster.labeled_count > 0"
-          class="text-[9px] font-mono font-bold tracking-widest text-success/80"
+          class="text-[10px] font-mono font-bold tracking-widest text-success/80"
           :title="`${cluster.labeled_count} of ${cluster.sample_count} samples labeled`"
         >
           {{ labeledPct }}%

@@ -66,7 +66,6 @@ function onSortChange(event: Event) {
       @change="onSortChange"
     >
       <option value="filename">Filename</option>
-      <option value="storage_index">Index</option>
       <optgroup v-if="gallery.sortableAttributes.length > 0" label="Attributes">
         <option
           v-for="attr in gallery.sortableAttributes"

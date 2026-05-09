@@ -48,8 +48,10 @@ def session_with_data(client, tmp_path):
         "class_id": cls["id"],
     })
 
-    # Run clustering
-    client.post(f"/sessions/{sid}/clusters/run", json={"n_clusters": 2})
+    # Run clustering on the extracted morphological features
+    client.post(f"/sessions/{sid}/clusters/run", json={
+        "n_clusters": 2, "feature_method": "morphological",
+    })
 
     return session
 

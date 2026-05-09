@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
-from pathlib import Path
 from PIL import Image
+
+from tests._helpers import list_samples, seed_features
 
 
 @pytest.fixture()
@@ -19,17 +20,14 @@ def session_with_features(client, tmp_path):
         "images_directory": str(img_dir),
     }).json()
 
-    # Create fake features (two clear groups)
-    session_folder = Path(session["session_folder"])
-    features_dir = session_folder / "features"
-    features_dir.mkdir(exist_ok=True)
-
+    # Create fake features (two clear groups), aligned to filename order
+    samples = list_samples(client, session["id"])
     rng = np.random.RandomState(42)
     features = np.vstack([
-        rng.randn(10, 32) + np.array([5] * 32),   # group 1
+        rng.randn(10, 32) + np.array([5] * 32),    # group 1
         rng.randn(10, 32) + np.array([-5] * 32),   # group 2
-    ])
-    np.save(features_dir / "session_features.npy", features)
+    ]).astype(np.float32)
+    seed_features(session["id"], [s["id"] for s in samples], features)
 
     return session
 

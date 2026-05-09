@@ -2,6 +2,7 @@ eidocell-old-app/
 example-app/
 example-datasets/
 blood-test/
+ifc-data-eval/
 .claude
 CLAUDE.md
 *.DS_Store

@@ -2,7 +2,6 @@ export interface SampleOut {
   id: string
   filename: string
   path: string
-  storage_index: number
   is_active: boolean
   class_id: string | null
   class_name: string | null

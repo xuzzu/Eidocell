@@ -22,6 +22,7 @@ class RunDimReductionRequest(BaseModel):
     method: str = "pca"
     n_components: int = Field(2, ge=2, le=3)
     params: dict = {}
+    feature_method: str = "mobilenetv3"
 
 
 class DimReductionResult(BaseModel):

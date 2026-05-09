@@ -49,7 +49,9 @@ def run_clustering(
     db: DbSession = Depends(get_db),
 ):
     """Run K-Means clustering on stored features."""
-    return clusters_service.run_clustering(db, session_id, data.n_clusters)
+    return clusters_service.run_clustering(
+        db, session_id, data.n_clusters, feature_method=data.feature_method
+    )
 
 
 @router.get("/", response_model=list[ClusterOut])

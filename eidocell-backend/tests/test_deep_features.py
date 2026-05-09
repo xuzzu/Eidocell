@@ -122,24 +122,24 @@ def test_list_methods_includes_mobilenetv3(client, session_for_deep):
 
 
 def test_deep_feature_extraction_sync(client, session_for_deep):
+    from core.storage import features as lance_features
     sid = session_for_deep["id"]
     result = _run_extract(client, sid, {"method": "mobilenetv3"})
     assert result["processed"] == 5
     assert result["skipped"] == 0
     assert result["feature_dim"] == 576
 
-    features_path = Path(session_for_deep["session_folder"]) / "features" / "session_features.npy"
-    features = np.load(features_path)
-    assert features.shape[1] == 576
+    _, vectors = lance_features.load_all_vectors(sid, "mobilenetv3")
+    assert vectors.shape == (5, 576)
 
 
 def test_deep_features_different_from_zero(client, session_for_deep):
+    from core.storage import features as lance_features
     sid = session_for_deep["id"]
     _run_extract(client, sid, {"method": "mobilenetv3"})
 
-    features_path = Path(session_for_deep["session_folder"]) / "features" / "session_features.npy"
-    features = np.load(features_path)
-    assert np.any(features != 0)
+    _, vectors = lance_features.load_all_vectors(sid, "mobilenetv3")
+    assert np.any(vectors != 0)
 
 
 def test_deep_features_then_pca(client, session_for_deep):

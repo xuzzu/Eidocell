@@ -1,78 +1,57 @@
 import logging
 import os
+import shutil
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import inspect, text
 
+from core.config import (
+    DATABASE_PATH,
+    EIDOCELL_HOME,
+    LANCE_DIR,
+    SESSIONS_DIR,
+    STORAGE_VERSION,
+    STORAGE_VERSION_FILE,
+)
 from db.session import engine, Base
 from routers import sessions, features, export, settings, tasks, learning, notifications
 from routers.workspace import gallery, classes, clusters, segmentation, analysis, similarity
 
-logger = logging.getLogger("eidocell.migrations")
-
-# Lightweight schema migrations (no Alembic)
-def _run_migrations():
-    """Apply schema changes that create_all cannot handle alone."""
-    inspector = inspect(engine)
-    with engine.begin() as conn:
-        # Gating refactor: rebuild the gates table with the new schema (nullable
-        # plot_id, operator, source_gate_ids). Wipe existing gate rows — the new
-        # selection-based semantics doesn't carry over the old per-gate is_active
-        # union flags meaningfully.
-        if "gates" in inspector.get_table_names():
-            columns = {c["name"] for c in inspector.get_columns("gates")}
-            if "operator" not in columns or "source_gate_ids" not in columns:
-                logger.info("Migration: rebuilding gates table for boolean-gate refactor")
-                conn.execute(text("DROP TABLE gates"))
-
-        if "clusters" in inspector.get_table_names():
-            columns = {c["name"] for c in inspector.get_columns("clusters")}
-            if "quality_score" not in columns:
-                logger.info("Migration: adding clusters.quality_score column")
-                conn.execute(text("ALTER TABLE clusters ADD COLUMN quality_score FLOAT"))
-            if "feature_method" not in columns:
-                logger.info("Migration: adding clusters.feature_method column")
-                conn.execute(text("ALTER TABLE clusters ADD COLUMN feature_method VARCHAR"))
-
-        if "sessions" in inspector.get_table_names():
-            columns = {c["name"] for c in inspector.get_columns("sessions")}
-            if "selected_gate_id" not in columns:
-                logger.info("Migration: adding sessions.selected_gate_id column")
-                conn.execute(text(
-                    "ALTER TABLE sessions ADD COLUMN selected_gate_id VARCHAR "
-                    "REFERENCES gates(id) ON DELETE SET NULL"
-                ))
-
-        if "plots" in inspector.get_table_names():
-            columns = {c["name"] for c in inspector.get_columns("plots")}
-            if "parent_gate_id" not in columns:
-                logger.info("Migration: adding plots.parent_gate_id column")
-                conn.execute(text(
-                    "ALTER TABLE plots ADD COLUMN parent_gate_id VARCHAR "
-                    "REFERENCES gates(id) ON DELETE SET NULL"
-                ))
+logger = logging.getLogger("eidocell.storage")
 
 
-_run_migrations()
+def _check_storage_version() -> None:
+    """Wipe ~/.eidocell when the on-disk version doesn't match STORAGE_VERSION.
 
-# Create all tables (recreates the gates table after the rebuild above).
+    Per the v2 storage refactor, schema migrations are not maintained — bumping
+    STORAGE_VERSION drops the SQLite DB, every Lance table, and every session
+    folder. The user has explicitly opted into this trade-off.
+    """
+    try:
+        current = int(STORAGE_VERSION_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        current = 0
+
+    if current == STORAGE_VERSION:
+        return
+
+    logger.warning(
+        "Storage version mismatch (on-disk=%s, expected=%s). Wiping ~/.eidocell.",
+        current, STORAGE_VERSION,
+    )
+    shutil.rmtree(LANCE_DIR, ignore_errors=True)
+    shutil.rmtree(SESSIONS_DIR, ignore_errors=True)
+    DATABASE_PATH.unlink(missing_ok=True)
+
+    EIDOCELL_HOME.mkdir(parents=True, exist_ok=True)
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    LANCE_DIR.mkdir(parents=True, exist_ok=True)
+    STORAGE_VERSION_FILE.write_text(str(STORAGE_VERSION))
+
+
+_check_storage_version()
 Base.metadata.create_all(bind=engine)
 
-
-def _post_migration_fixups():
-    """One-shot data fixups that need the new schema in place."""
-    inspector = inspect(engine)
-    with engine.begin() as conn:
-        if "samples" in inspector.get_table_names():
-            # After the gating wipe, no session has a selected population anymore —
-            # so every sample should be considered active again.
-            conn.execute(text("UPDATE samples SET is_active = 1 WHERE is_active = 0"))
-        if "sessions" in inspector.get_table_names():
-            conn.execute(text("UPDATE sessions SET selected_gate_id = NULL"))
-
-
-_post_migration_fixups()
 
 app = FastAPI(title="EidoCell", version="0.1.0")
 

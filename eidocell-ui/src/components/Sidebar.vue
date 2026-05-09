@@ -54,7 +54,7 @@ const isActive = (itemPath: string) => {
         class="flex items-center gap-3 px-4 py-3 rounded-[2px] hover:bg-base-200 transition-colors"
       >
         <div class="w-1.5 h-1.5 shrink-0 rounded-[1px] outline outline-1 outline-offset-1" :class="sessionStore.hasCurrentSession ? 'bg-green-500 outline-green-500/50' : 'bg-transparent outline-neutral/40'"></div>
-        <span class="text-[10px] font-mono font-bold tracking-wider uppercase opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap overflow-hidden text-neutral/70">
+        <span class="text-xs font-mono font-bold tracking-wider uppercase opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap overflow-hidden text-neutral/70">
           {{ sessionStore.currentSession?.name ?? 'No session' }}
         </span>
       </router-link>

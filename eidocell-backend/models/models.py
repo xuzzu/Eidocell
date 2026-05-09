@@ -73,9 +73,10 @@ class Sample(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     path: Mapped[str] = mapped_column(String, nullable=False)
-    storage_index: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     class_id: Mapped[str | None] = mapped_column(ForeignKey("classes.id"), nullable=True, index=True)
+    # Forward hook for multi-channel data: e.g. {"order": ["DAPI", "GFP"], "shape": [H, W, 2]}.
+    channels: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     session: Mapped["Session"] = relationship(back_populates="samples")
     sample_class: Mapped["SampleClass | None"] = relationship(back_populates="samples")
@@ -109,8 +110,10 @@ class Mask(Base):
     sample_id: Mapped[str] = mapped_column(
         ForeignKey("samples.id"), nullable=False, unique=True, index=True
     )
-    masked_image_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    attributes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    segmentation_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
 
     sample: Mapped["Sample"] = relationship(back_populates="mask")
 

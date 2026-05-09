@@ -4,19 +4,81 @@ import logging
 from pathlib import Path
 
 import cv2
-import numpy as np
 from fastapi import HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from sqlalchemy.orm import Session as DbSession
 
-from core.processors.inference.segmentation import get_processor, list_methods
-from core.processors.inference.mask_attributes import compute_mask_attributes
+from core.image_io import read as read_image
 from core.processors.image_utils import generate_mask_overlay
+from core.processors.inference.mask_attributes import compute_mask_attributes
+from core.processors.inference.segmentation import get_processor, list_methods
+from core.storage import mask_attrs as lance_mask_attrs
+from core.storage import masks as mask_files
 from core.task_manager import task_manager
-from core.utils import get_active_samples, npy_save, npy_load
-from models.models import Session, Sample, Mask
+from core.utils import get_active_samples
+from models.models import Mask, Sample, Session
+from services._pipeline_utils import thread_db_session
 
 logger = logging.getLogger("eidocell.segmentation")
+
+
+_OVERLAYS_SUBDIR = "previews/overlays"
+
+
+def _overlay_path(session_folder: Path, sample_id: str) -> Path:
+    return session_folder / _OVERLAYS_SUBDIR / f"{sample_id}.png"
+
+
+def _segment_one(
+    src_path: Path,
+    processor,
+    params: dict,
+    scale_factor: float,
+    session_folder: Path,
+    sample_id: str,
+):
+    """Read image, segment, write mask + overlay to disk, return (attrs, ok).
+
+    Returns (attrs_or_None, True) on success, (None, False) on failure.
+    """
+    image, _channels = read_image(src_path)
+    if image is None:
+        return None, False
+    mask_data = processor.segment(image, **params)
+    attrs = compute_mask_attributes(image, mask_data, scale_factor)
+
+    mask_files.write_mask(session_folder, sample_id, mask_data)
+
+    overlay = generate_mask_overlay(image, mask_data)
+    overlay_path = _overlay_path(session_folder, sample_id)
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    return attrs, True
+
+
+def _persist_results(
+    db: DbSession,
+    session_id: str,
+    method: str,
+    new_mask_sample_ids: list[str],
+    attr_rows: list[dict],
+) -> None:
+    """Insert Mask rows for new samples and upsert Lance attribute rows."""
+    if new_mask_sample_ids:
+        existing_ids = {
+            sid for (sid,) in db.query(Mask.sample_id)
+            .filter(Mask.sample_id.in_(new_mask_sample_ids)).all()
+        }
+        for sid in new_mask_sample_ids:
+            if sid in existing_ids:
+                db.query(Mask).filter(Mask.sample_id == sid).update(
+                    {"segmentation_method": method}
+                )
+            else:
+                db.add(Mask(sample_id=sid, segmentation_method=method))
+        db.commit()
+
+    if attr_rows:
+        lance_mask_attrs.upsert_attrs(session_id, attr_rows)
 
 
 def run_segmentation(
@@ -40,85 +102,10 @@ def run_segmentation(
         raise HTTPException(status_code=400, detail="No active samples")
 
     session_folder = Path(session.session_folder)
-    scale_factor = session.scale_factor
-    overlay_dir = session_folder / "masked_images"
-    overlay_dir.mkdir(exist_ok=True)
-
-    # Snapshot sample data to avoid lazy-load issues during processing
-    sample_data = [
-        {"id": s.id, "path": s.path, "storage_index": s.storage_index}
-        for s in samples
-    ]
-
-    # Check which samples already have masks
-    existing_mask_ids = {
-        m.sample_id
-        for m in db.query(Mask.sample_id).filter(
-            Mask.sample_id.in_([s["id"] for s in sample_data])
-        ).all()
-    }
-
-    # Build/load consolidated masks array
-    masks_path = session_folder / "features" / "session_masks.npy"
-    max_index = max(s["storage_index"] for s in sample_data) + 1
-    if masks_path.exists():
-        all_masks = npy_load(masks_path, allow_pickle=True)
-        if len(all_masks) < max_index:
-            new_arr = np.empty(max_index, dtype=object)
-            new_arr[:len(all_masks)] = all_masks
-            all_masks = new_arr
-    else:
-        all_masks = np.empty(max_index, dtype=object)
-
-    processed = 0
-    failed = 0
-    mask_updates = []
-    mask_creates = []
-
-    for sd in sample_data:
-        src_path = Path(sd["path"])
-        if not src_path.is_file():
-            failed += 1
-            continue
-
-        try:
-            image = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
-            if image is None:
-                failed += 1
-                continue
-
-            mask_data = processor.segment(image, **params)
-            all_masks[sd["storage_index"]] = mask_data
-            attrs = compute_mask_attributes(image, mask_data, scale_factor)
-
-            overlay = generate_mask_overlay(image, mask_data)
-            overlay_path = overlay_dir / f"{sd['id']}.png"
-            cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
-
-            if sd["id"] in existing_mask_ids:
-                mask_updates.append((sd["id"], str(overlay_path), attrs))
-            else:
-                mask_creates.append((sd["id"], str(overlay_path), attrs))
-
-            processed += 1
-        except Exception:
-            failed += 1
-            continue
-
-    # Batch DB writes
-    for sample_id, overlay_path, attrs in mask_updates:
-        db.query(Mask).filter(Mask.sample_id == sample_id).update(
-            {"masked_image_path": overlay_path, "attributes": attrs}
-        )
-    for sample_id, overlay_path, attrs in mask_creates:
-        db.add(Mask(sample_id=sample_id, masked_image_path=overlay_path, attributes=attrs))
-
-    (session_folder / "features").mkdir(exist_ok=True)
-    npy_save(masks_path, all_masks, allow_pickle=True)
-
-    db.commit()
-    logger.info("Segmentation complete: %d processed, %d failed", processed, failed)
-    return {"processed": processed, "failed": failed, "total": len(sample_data)}
+    sample_data = [{"id": s.id, "path": s.path} for s in samples]
+    return _run_for_samples(
+        db, session, processor, method, params, sample_data, session_folder
+    )
 
 
 def run_segmentation_preview(
@@ -128,7 +115,7 @@ def run_segmentation_preview(
     params: dict,
     sample_ids: list[str],
 ) -> dict:
-    """Run segmentation on specific samples (for live preview)."""
+    """Run segmentation on specific samples (committed to disk + DB)."""
     try:
         processor = get_processor(method)
     except ValueError as e:
@@ -146,82 +133,48 @@ def run_segmentation_preview(
         raise HTTPException(status_code=400, detail="No matching samples found")
 
     session_folder = Path(session.session_folder)
+    sample_data = [{"id": s.id, "path": s.path} for s in samples]
+    return _run_for_samples(
+        db, session, processor, method, params, sample_data, session_folder
+    )
+
+
+def _run_for_samples(
+    db: DbSession,
+    session: Session,
+    processor,
+    method: str,
+    params: dict,
+    sample_data: list[dict],
+    session_folder: Path,
+) -> dict:
     scale_factor = session.scale_factor
-    overlay_dir = session_folder / "masked_images"
-    overlay_dir.mkdir(exist_ok=True)
-
-    sample_data = [
-        {"id": s.id, "path": s.path, "storage_index": s.storage_index}
-        for s in samples
-    ]
-
-    existing_mask_ids = {
-        m.sample_id
-        for m in db.query(Mask.sample_id).filter(
-            Mask.sample_id.in_([s["id"] for s in sample_data])
-        ).all()
-    }
-
-    # Build/load consolidated masks array
-    masks_path = session_folder / "features" / "session_masks.npy"
-    max_index = max(s["storage_index"] for s in sample_data) + 1
-    if masks_path.exists():
-        all_masks = npy_load(masks_path, allow_pickle=True)
-        if len(all_masks) < max_index:
-            new_arr = np.empty(max_index, dtype=object)
-            new_arr[:len(all_masks)] = all_masks
-            all_masks = new_arr
-    else:
-        all_masks = np.empty(max_index, dtype=object)
-
     processed = 0
     failed = 0
-    mask_updates = []
-    mask_creates = []
+    attr_rows: list[dict] = []
+    new_mask_sample_ids: list[str] = []
 
     for sd in sample_data:
         src_path = Path(sd["path"])
         if not src_path.is_file():
             failed += 1
             continue
-
         try:
-            image = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
-            if image is None:
+            attrs, ok = _segment_one(
+                src_path, processor, params, scale_factor, session_folder, sd["id"]
+            )
+            if not ok:
                 failed += 1
                 continue
-
-            mask_data = processor.segment(image, **params)
-            all_masks[sd["storage_index"]] = mask_data
-            attrs = compute_mask_attributes(image, mask_data, scale_factor)
-
-            overlay = generate_mask_overlay(image, mask_data)
-            overlay_path = overlay_dir / f"{sd['id']}.png"
-            cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
-
-            if sd["id"] in existing_mask_ids:
-                mask_updates.append((sd["id"], str(overlay_path), attrs))
-            else:
-                mask_creates.append((sd["id"], str(overlay_path), attrs))
-
+            new_mask_sample_ids.append(sd["id"])
+            attr_rows.append({"sample_id": sd["id"], **(attrs or {})})
             processed += 1
         except Exception:
+            logger.exception("segmentation failed for sample %s", sd["id"])
             failed += 1
-            continue
 
-    # Batch DB writes
-    for sample_id, overlay_path, attrs in mask_updates:
-        db.query(Mask).filter(Mask.sample_id == sample_id).update(
-            {"masked_image_path": overlay_path, "attributes": attrs}
-        )
-    for sample_id, overlay_path, attrs in mask_creates:
-        db.add(Mask(sample_id=sample_id, masked_image_path=overlay_path, attributes=attrs))
-
-    (session_folder / "features").mkdir(exist_ok=True)
-    npy_save(masks_path, all_masks, allow_pickle=True)
-
-    db.commit()
-    logger.info("Segmentation preview complete: %d processed, %d failed", processed, failed)
+    _persist_results(db, session.id, method, new_mask_sample_ids, attr_rows)
+    logger.info("Segmentation complete: %d processed, %d failed", processed, failed)
     return {"processed": processed, "failed": failed, "total": len(sample_data)}
 
 
@@ -247,7 +200,6 @@ def stream_preview_overlays(
         Sample.id.in_(sample_ids),
         Sample.session_id == session_id,
     ).all()
-    # Preserve client-requested order
     samples_by_id = {s.id: s for s in samples}
     ordered = [samples_by_id[sid] for sid in sample_ids if sid in samples_by_id]
 
@@ -259,15 +211,13 @@ def stream_preview_overlays(
             yield s.id, None, None
             continue
         try:
-            image = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
+            image, _ = read_image(src_path)
             if image is None:
                 yield s.id, None, None
                 continue
-
             mask_data = processor.segment(image, **params)
             attrs = compute_mask_attributes(image, mask_data, scale_factor)
             overlay = generate_mask_overlay(image, mask_data)
-            # Encode RGB → BGR for cv2.imencode, then to PNG bytes
             ok, buf = cv2.imencode(".png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
             if not ok:
                 yield s.id, None, None
@@ -295,31 +245,20 @@ def run_segmentation_async(
     if not samples:
         raise HTTPException(status_code=400, detail="No active samples")
 
-    sample_data = [
-        {"id": s.id, "path": s.path, "storage_index": s.storage_index}
-        for s in samples
-    ]
-    existing_mask_ids = {
-        m.sample_id
-        for m in db.query(Mask.sample_id).filter(
-            Mask.sample_id.in_([s["id"] for s in sample_data])
-        ).all()
-    }
-
+    sample_data = [{"id": s.id, "path": s.path} for s in samples]
     db_url = str(db.get_bind().url)
 
-    task_id = task_manager.submit(
+    return task_manager.submit(
         name=f"Segmentation ({method})",
         func=_background_segment,
         method=method,
         params=params,
         sample_data=sample_data,
-        existing_mask_ids=existing_mask_ids,
+        session_id=session.id,
         session_folder=session.session_folder,
         scale_factor=session.scale_factor,
         db_url=db_url,
     )
-    return task_id
 
 
 def _background_segment(
@@ -327,7 +266,7 @@ def _background_segment(
     method: str,
     params: dict,
     sample_data: list[dict],
-    existing_mask_ids: set,
+    session_id: str,
     session_folder: str,
     scale_factor: float,
     db_url: str,
@@ -337,31 +276,18 @@ def _background_segment(
     """Run segmentation in a background thread."""
     processor = get_processor(method)
     session_folder = Path(session_folder)
-    overlay_dir = session_folder / "masked_images"
-    overlay_dir.mkdir(exist_ok=True)
-
-    masks_path = session_folder / "features" / "session_masks.npy"
-    max_index = max(s["storage_index"] for s in sample_data) + 1
-    if masks_path.exists():
-        all_masks = npy_load(masks_path, allow_pickle=True)
-        if len(all_masks) < max_index:
-            new_arr = np.empty(max_index, dtype=object)
-            new_arr[:len(all_masks)] = all_masks
-            all_masks = new_arr
-    else:
-        all_masks = np.empty(max_index, dtype=object)
 
     total = len(sample_data)
     processed = 0
     failed = 0
-    mask_updates = []
-    mask_creates = []
+    attr_rows: list[dict] = []
+    new_mask_sample_ids: list[str] = []
 
     on_progress(0, total, "Starting segmentation...")
 
     for i, sd in enumerate(sample_data):
         if is_cancelled and is_cancelled():
-            pass # TaskCancelledException will be raised by on_progress
+            pass  # TaskCancelledException raised by on_progress
 
         src_path = Path(sd["path"])
         if not src_path.is_file():
@@ -370,66 +296,46 @@ def _background_segment(
             continue
 
         try:
-            image = cv2.imread(str(src_path), cv2.IMREAD_UNCHANGED)
-            if image is None:
+            attrs, ok = _segment_one(
+                src_path, processor, params, scale_factor, session_folder, sd["id"]
+            )
+            if not ok:
                 failed += 1
-                on_progress(i + 1, total, f"Processed {i + 1}/{total}")
-                continue
-
-            mask_data = processor.segment(image, **params)
-            all_masks[sd["storage_index"]] = mask_data
-            attrs = compute_mask_attributes(image, mask_data, scale_factor)
-
-            overlay = generate_mask_overlay(image, mask_data)
-            overlay_path = overlay_dir / f"{sd['id']}.png"
-            cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
-
-            if sd["id"] in existing_mask_ids:
-                mask_updates.append((sd["id"], str(overlay_path), attrs))
             else:
-                mask_creates.append((sd["id"], str(overlay_path), attrs))
-
-            processed += 1
+                new_mask_sample_ids.append(sd["id"])
+                attr_rows.append({"sample_id": sd["id"], **(attrs or {})})
+                processed += 1
         except Exception:
+            logger.exception("segmentation failed for sample %s", sd["id"])
             failed += 1
 
         on_progress(i + 1, total, f"Processed {i + 1}/{total}")
 
-    # Write DB in background thread using its own session
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-    DBSession = sessionmaker(bind=engine)
-    db = DBSession()
-    try:
-        for sample_id, overlay_path, attrs in mask_updates:
-            db.query(Mask).filter(Mask.sample_id == sample_id).update(
-                {"masked_image_path": overlay_path, "attributes": attrs}
-            )
-        for sample_id, overlay_path, attrs in mask_creates:
-            db.add(Mask(sample_id=sample_id, masked_image_path=overlay_path, attributes=attrs))
-
-        (session_folder / "features").mkdir(exist_ok=True)
-        npy_save(masks_path, all_masks, allow_pickle=True)
-        db.commit()
-    finally:
-        db.close()
-        engine.dispose()
+    with thread_db_session(db_url) as db:
+        _persist_results(db, session_id, method, new_mask_sample_ids, attr_rows)
 
     logger.info("Background segmentation complete: %d processed, %d failed", processed, failed)
     return {"processed": processed, "failed": failed, "total": total}
 
 
 def get_mask_attributes(db: DbSession, sample_id: str) -> dict:
-    mask = db.query(Mask).filter(Mask.sample_id == sample_id).first()
-    if not mask:
+    sample = db.query(Sample).filter(Sample.id == sample_id).first()
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    attrs = lance_mask_attrs.get_attrs(sample.session_id, sample_id)
+    if attrs is None:
         raise HTTPException(status_code=404, detail="No mask found for this sample")
-    return mask.attributes or {}
+    return attrs
 
 
 def get_mask_overlay_path(db: DbSession, sample_id: str) -> Path:
-    mask = db.query(Mask).filter(Mask.sample_id == sample_id).first()
-    if not mask or not mask.masked_image_path:
-        raise HTTPException(status_code=404, detail="No mask overlay found for this sample")
-    path = Path(mask.masked_image_path)
+    sample = db.query(Sample).filter(Sample.id == sample_id).first()
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    session = db.query(Session).filter(Session.id == sample.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    path = _overlay_path(Path(session.session_folder), sample_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Mask overlay file not found on disk")
     return path

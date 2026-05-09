@@ -4,14 +4,15 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from models.models import Sample, SampleClass, Mask
 from core.processors.image_utils import generate_thumbnail
+from core.storage import mask_attrs as lance_mask_attrs
+from models.models import Mask, Sample, SampleClass
 from schemas.workspace.gallery import (
-    SampleListParams,
-    FilterCondition,
+    BulkClassAssignment,
     ClassCreate,
     ClassUpdate,
-    BulkClassAssignment,
+    FilterCondition,
+    SampleListParams,
 )
 
 
@@ -19,56 +20,85 @@ from schemas.workspace.gallery import (
 
 
 def list_samples(db: DbSession, session_id: str, params: SampleListParams) -> tuple[list[dict], int]:
-    query = (
+    """List samples with filters/sort. attr:* sorts are resolved via Lance."""
+    base_query = (
         db.query(Sample, SampleClass)
         .outerjoin(SampleClass, Sample.class_id == SampleClass.id)
         .filter(Sample.session_id == session_id, Sample.is_active == True)
     )
-
-    # Apply filters
     for f in params.filters:
-        query = _apply_filter(query, f)
+        base_query = _apply_filter(base_query, f)
 
-    total = query.count()
-
-    # Sorting
     if params.sort_by.startswith("attr:"):
         attr_name = params.sort_by.split(":", 1)[1]
-        sort_expr = func.json_extract(Mask.attributes, f'$.{attr_name}')
-        query = query.outerjoin(Mask, Mask.sample_id == Sample.id)
-        if params.sort_order == "desc":
-            sort_expr = sort_expr.desc()
-        query = query.order_by(sort_expr)
+        if attr_name not in lance_mask_attrs.ATTRIBUTE_NAMES:
+            raise HTTPException(status_code=400, detail=f"Unknown attribute: {attr_name}")
+
+        # Pull unsorted candidate ids/classes from SQL, then order by Lance.
+        candidate_rows = base_query.all()
+        sample_by_id = {s.id: (s, cls) for s, cls in candidate_rows}
+        if not sample_by_id:
+            return [], 0
+
+        ordered_ids = _attr_sorted_sample_ids(
+            session_id,
+            attr_name,
+            list(sample_by_id.keys()),
+            descending=(params.sort_order == "desc"),
+        )
+        # Append samples missing the attribute at the end (preserves total count)
+        missing = [sid for sid in sample_by_id if sid not in set(ordered_ids)]
+        ordered_ids.extend(missing)
+
+        total = len(ordered_ids)
+        page_ids = ordered_ids[params.offset : params.offset + params.limit]
+        rows = [sample_by_id[sid] for sid in page_ids if sid in sample_by_id]
     else:
         sort_col = _get_sort_column(params.sort_by)
         if params.sort_order == "desc":
             sort_col = sort_col.desc()
-        query = query.order_by(sort_col)
-
-    # Pagination
-    rows = query.offset(params.offset).limit(params.limit).all()
+        ordered_query = base_query.order_by(sort_col)
+        total = ordered_query.count()
+        rows = ordered_query.offset(params.offset).limit(params.limit).all()
 
     sample_ids_in_page = [sample.id for sample, _ in rows]
-    mask_sample_ids = {
-        m.sample_id for m in db.query(Mask.sample_id).filter(Mask.sample_id.in_(sample_ids_in_page)).all()
-    } if sample_ids_in_page else set()
+    mask_sample_ids = (
+        {m.sample_id for m in db.query(Mask.sample_id).filter(Mask.sample_id.in_(sample_ids_in_page)).all()}
+        if sample_ids_in_page else set()
+    )
 
     items = []
     for sample, sample_class in rows:
-        has_mask = sample.id in mask_sample_ids
         items.append({
             "id": sample.id,
             "filename": sample.filename,
             "path": sample.path,
-            "storage_index": sample.storage_index,
             "is_active": sample.is_active,
             "class_id": sample.class_id,
             "class_name": sample_class.name if sample_class else None,
             "class_color": sample_class.color if sample_class else None,
-            "has_mask": has_mask,
+            "has_mask": sample.id in mask_sample_ids,
         })
 
     return items, total
+
+
+def _attr_sorted_sample_ids(
+    session_id: str, attr: str, candidate_ids: list[str], *, descending: bool
+) -> list[str]:
+    """Return candidate_ids ordered by Lance attribute value. Missing values dropped."""
+    if not candidate_ids:
+        return []
+    sids, cols = lance_mask_attrs.fetch_columns(
+        session_id, [attr], sample_ids=candidate_ids
+    )
+    if not sids:
+        return []
+    arr = cols[attr]
+    order = arr.argsort(kind="stable")
+    if descending:
+        order = order[::-1]
+    return [sids[i] for i in order]
 
 
 def get_sample(db: DbSession, sample_id: str) -> dict:
@@ -86,7 +116,6 @@ def get_sample(db: DbSession, sample_id: str) -> dict:
         "id": sample.id,
         "filename": sample.filename,
         "path": sample.path,
-        "storage_index": sample.storage_index,
         "is_active": sample.is_active,
         "class_id": sample.class_id,
         "class_name": sample_class.name if sample_class else None,
@@ -110,7 +139,7 @@ def get_thumbnail_path(db: DbSession, sample_id: str, session_folder: str) -> Pa
     if not sample:
         raise HTTPException(status_code=404, detail="Sample not found")
 
-    thumb_dir = Path(session_folder) / "thumbnails"
+    thumb_dir = Path(session_folder) / "previews" / "thumbnails"
     thumb_path = thumb_dir / f"{sample.id}.jpg"
 
     if not thumb_path.exists():
@@ -163,7 +192,6 @@ def update_class(db: DbSession, class_id: str, data: ClassUpdate) -> dict:
         raise HTTPException(status_code=404, detail="Class not found")
 
     if data.name is not None:
-        # Check uniqueness within session
         dup = (
             db.query(SampleClass)
             .filter(
@@ -194,7 +222,6 @@ def delete_class(db: DbSession, class_id: str) -> None:
     if cls.name == "Uncategorized":
         raise HTTPException(status_code=400, detail="Cannot delete the Uncategorized class")
 
-    # Move samples back to Uncategorized
     uncategorized = (
         db.query(SampleClass)
         .filter(SampleClass.session_id == cls.session_id, SampleClass.name == "Uncategorized")
@@ -229,16 +256,8 @@ def assign_samples_to_class(db: DbSession, data: BulkClassAssignment) -> int:
 
 
 def list_sortable_attributes(db: DbSession, session_id: str) -> list[str]:
-    """Return a list of attribute names available for sorting (from mask attributes)."""
-    mask = (
-        db.query(Mask)
-        .join(Sample, Mask.sample_id == Sample.id)
-        .filter(Sample.session_id == session_id, Mask.attributes.isnot(None))
-        .first()
-    )
-    if not mask or not mask.attributes:
-        return []
-    return sorted(mask.attributes.keys())
+    """Return attribute names available for sorting (driven by Lance schema)."""
+    return sorted(lance_mask_attrs.list_attribute_names(session_id))
 
 
 # ── Filtering helpers ────────────────────────────────────────────────────
@@ -247,7 +266,6 @@ def list_sortable_attributes(db: DbSession, session_id: str) -> list[str]:
 def _get_sort_column(sort_by: str):
     mapping = {
         "filename": Sample.filename,
-        "storage_index": Sample.storage_index,
         "class_name": SampleClass.name,
     }
     col = mapping.get(sort_by)

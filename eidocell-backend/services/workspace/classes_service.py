@@ -1,12 +1,14 @@
 import statistics
 from pathlib import Path
 
+import numpy as np
 from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session as DbSession
 
-from models.models import Mask, Sample, SampleClass, Session
 from core.processors.image_utils import generate_collage, MAX_COLLAGE_SAMPLES
+from core.storage import mask_attrs as lance_mask_attrs
+from models.models import Sample, SampleClass, Session
 
 # Key attributes to aggregate for class statistics
 _STAT_ATTRIBUTES = [
@@ -52,7 +54,6 @@ def list_class_samples(
             "id": s.id,
             "filename": s.filename,
             "path": s.path,
-            "storage_index": s.storage_index,
             "is_active": s.is_active,
             "class_id": s.class_id,
             "class_name": cls.name,
@@ -67,25 +68,22 @@ def get_class_statistics(db: DbSession, class_id: str) -> dict:
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
-    rows = (
-        db.query(Mask.attributes)
-        .join(Sample, Sample.id == Mask.sample_id)
-        .filter(Sample.class_id == class_id, Sample.is_active == True, Mask.attributes.isnot(None))
+    sample_ids = [
+        sid for (sid,) in db.query(Sample.id)
+        .filter(Sample.class_id == class_id, Sample.is_active == True)
         .all()
-    )
+    ]
+    sample_count = len(sample_ids)
 
-    sample_count = db.query(func.count(Sample.id)).filter(
-        Sample.class_id == class_id, Sample.is_active == True
-    ).scalar()
+    attrs_by_sid = lance_mask_attrs.get_attrs_bulk(cls.session_id, sample_ids)
 
     attr_stats = []
     for attr_name in _STAT_ATTRIBUTES:
-        values = []
-        for (attrs,) in rows:
-            if attrs and attr_name in attrs:
-                v = attrs[attr_name]
-                if v is not None and isinstance(v, (int, float)):
-                    values.append(float(v))
+        values: list[float] = []
+        for attrs in attrs_by_sid.values():
+            v = attrs.get(attr_name)
+            if v is not None and isinstance(v, (int, float)):
+                values.append(float(v))
 
         if values:
             attr_stats.append({
@@ -108,21 +106,68 @@ def get_class_statistics(db: DbSession, class_id: str) -> dict:
     }
 
 
+def get_session_attribute_distributions(
+    db: DbSession, session_id: str, bins: int = 30
+) -> dict:
+    session = db.query(Session).filter(Session.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    sample_ids = [
+        sid for (sid,) in db.query(Sample.id)
+        .filter(Sample.session_id == session_id, Sample.is_active == True)
+        .all()
+    ]
+    attrs_by_sid = lance_mask_attrs.get_attrs_bulk(session_id, sample_ids)
+
+    distributions = []
+    for attr_name in _STAT_ATTRIBUTES:
+        values: list[float] = []
+        for attrs in attrs_by_sid.values():
+            v = attrs.get(attr_name)
+            if v is not None and isinstance(v, (int, float)):
+                values.append(float(v))
+
+        if not values:
+            distributions.append({
+                "name": attr_name,
+                "bin_edges": [],
+                "bin_counts": [],
+            })
+            continue
+
+        arr = np.asarray(values, dtype=float)
+        counts, edges = np.histogram(arr, bins=bins)
+        distributions.append({
+            "name": attr_name,
+            "bin_edges": edges.tolist(),
+            "bin_counts": counts.astype(int).tolist(),
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "std": float(arr.std(ddof=1)) if arr.size > 1 else 0.0,
+        })
+
+    return {
+        "sample_count": len(attrs_by_sid),
+        "attributes": distributions,
+    }
+
+
 def get_or_generate_collage(db: DbSession, class_id: str) -> Path:
     cls = db.query(SampleClass).filter(SampleClass.id == class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
     session = db.query(Session).filter(Session.id == cls.session_id).first()
-    collage_dir = Path(session.session_folder) / "collages"
-    collage_dir.mkdir(exist_ok=True)
+    collage_dir = Path(session.session_folder) / "previews" / "collages"
+    collage_dir.mkdir(parents=True, exist_ok=True)
     collage_path = collage_dir / f"{class_id}.jpg"
 
-    # Always regenerate — class contents may have changed
     samples = (
         db.query(Sample)
         .filter(Sample.class_id == class_id, Sample.is_active == True)
-        .order_by(Sample.storage_index)
+        .order_by(Sample.filename)
         .limit(MAX_COLLAGE_SAMPLES)
         .all()
     )

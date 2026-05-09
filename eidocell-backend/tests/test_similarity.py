@@ -1,8 +1,8 @@
-from pathlib import Path
-
 import numpy as np
 import pytest
 from PIL import Image
+
+from tests._helpers import list_samples as _list_samples, seed_features
 
 
 def _make_session(client, tmp_path, name="Sim Test", n_samples=20):
@@ -23,25 +23,15 @@ def _make_session(client, tmp_path, name="Sim Test", n_samples=20):
 def session_with_features(client, tmp_path):
     """Session with two clear feature groups (10 + 10)."""
     session = _make_session(client, tmp_path, n_samples=20)
-    session_folder = Path(session["session_folder"])
-    features_dir = session_folder / "features"
-    features_dir.mkdir(exist_ok=True)
+    samples = _list_samples(client, session["id"])
 
     rng = np.random.RandomState(42)
-    # Group A near +5, group B near -5; positive vectors are guaranteed
-    # by adding a large offset so cosine stays in [0, 1].
     features = np.vstack([
-        rng.randn(10, 32) * 0.1 + np.array([10.0] * 32),  # group A
-        np.abs(rng.randn(10, 32)) * 0.1 + np.array([0.5] * 16 + [10.0] * 16),  # group B
+        rng.randn(10, 32) * 0.1 + np.array([10.0] * 32),
+        np.abs(rng.randn(10, 32)) * 0.1 + np.array([0.5] * 16 + [10.0] * 16),
     ]).astype(np.float32)
-    np.save(features_dir / "session_features.npy", features)
+    seed_features(session["id"], [s["id"] for s in samples], features)
     return session
-
-
-def _list_samples(client, sid):
-    return client.post(f"/sessions/{sid}/samples/list", json={
-        "offset": 0, "limit": 100, "sort_by": "storage_index", "sort_order": "asc",
-    }).json()["items"]
 
 
 # ── Basic search ────────────────────────────────────────────────────────

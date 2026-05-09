@@ -24,6 +24,10 @@ export const useGalleryStore = defineStore('gallery', () => {
   // file at a stable URL has been overwritten.
   const maskVersion = ref(0)
 
+  // Persists across view switches so the toggle isn't reset when GalleryView
+  // remounts after the user navigates away and back.
+  const inspectMode = ref(true)
+
   // Set by GalleryView; called by children to open the SimilaritySearchDialog
   // without prop-drilling its ref through SampleGrid.
   const openSimilarityDialog = ref<((ids: string[]) => void) | null>(null)
@@ -152,7 +156,7 @@ export const useGalleryStore = defineStore('gallery', () => {
   return {
     samples, total, offset, limit, sortBy, sortOrder, filters,
     selectedIds, detailSample, classes, loading,
-    sortableAttributes, maskVersion, openSimilarityDialog,
+    sortableAttributes, maskVersion, inspectMode, openSimilarityDialog,
     $reset,
     fetchSamples, loadNextPage, fetchClasses, fetchSortableAttributes,
     createClass, deleteClass,

@@ -5,6 +5,8 @@ import pytest
 from pathlib import Path
 from PIL import Image
 
+from tests._helpers import list_samples, seed_features
+
 
 def _create_test_image(path: Path, size=(100, 100), brightness=128):
     """Create a test image with configurable brightness for class separation."""
@@ -28,15 +30,13 @@ def session_with_labeled_data(client, tmp_path):
     }).json()
     sid = session["id"]
 
-    # Create well-separated features (2 clusters)
-    features_dir = Path(session["session_folder"]) / "features"
-    features_dir.mkdir(exist_ok=True)
+    samples = list_samples(client, sid)
     rng = np.random.RandomState(42)
     features = np.vstack([
         rng.randn(10, 32).astype(np.float32) + 5,   # first 10 samples → class A
         rng.randn(10, 32).astype(np.float32) - 5,   # last 10 samples → class B
     ])
-    np.save(features_dir / "session_features.npy", features)
+    seed_features(sid, [s["id"] for s in samples], features, method="raw")
 
     # Create two classes
     class_a = client.post(f"/sessions/{sid}/classes", json={
@@ -46,17 +46,11 @@ def session_with_labeled_data(client, tmp_path):
         "name": "Elongated", "color": "#0000FF",
     }).json()
 
-    # Get samples and assign first 4 to Round, next 4 to Elongated
-    samples = client.post(f"/sessions/{sid}/samples/list", json={
-        "sort_by": "storage_index",
-    }).json()["items"]
-
-    # First 4 samples (indices 0-3) → Round
+    # First 4 samples → Round, samples 10-13 → Elongated
     client.post(f"/sessions/{sid}/samples/assign-class", json={
         "sample_ids": [s["id"] for s in samples[:4]],
         "class_id": class_a["id"],
     })
-    # Samples 10-13 → Elongated
     client.post(f"/sessions/{sid}/samples/assign-class", json={
         "sample_ids": [s["id"] for s in samples[10:14]],
         "class_id": class_b["id"],
@@ -150,16 +144,17 @@ def test_train_insufficient_classes(client, tmp_path):
     sid = session["id"]
 
     # Create features
-    features_dir = Path(session["session_folder"]) / "features"
-    features_dir.mkdir(exist_ok=True)
-    np.save(features_dir / "session_features.npy",
-            np.random.randn(5, 16).astype(np.float32))
+    samples = list_samples(client, sid)
+    seed_features(
+        sid, [s["id"] for s in samples],
+        np.random.randn(5, 16).astype(np.float32),
+        method="raw",
+    )
 
     # Create one class and assign samples
     cls = client.post(f"/sessions/{sid}/classes", json={
         "name": "OnlyOne", "color": "#FF0000",
     }).json()
-    samples = client.post(f"/sessions/{sid}/samples/list", json={}).json()["items"]
     client.post(f"/sessions/{sid}/samples/assign-class", json={
         "sample_ids": [s["id"] for s in samples],
         "class_id": cls["id"],
@@ -231,9 +226,7 @@ def test_infer_no_unlabeled(client, session_with_labeled_data):
     class_b = session_with_labeled_data["class_b"]
 
     # Re-fetch samples to get current class assignments
-    samples = client.post(f"/sessions/{sid}/samples/list", json={
-        "sort_by": "storage_index",
-    }).json()["items"]
+    samples = list_samples(client, sid)
 
     # Assign remaining Uncategorized to one of the two classes
     uncategorized = [s["id"] for s in samples if s["class_name"] == "Uncategorized"]
@@ -342,14 +335,13 @@ def test_cross_session_apply(client, session_with_labeled_data, tmp_path):
     sid_b = session_b["id"]
 
     # Create matching features (32-dim, same as session A)
-    features_dir_b = Path(session_b["session_folder"]) / "features"
-    features_dir_b.mkdir(exist_ok=True)
+    samples_b = list_samples(client, sid_b)
     rng = np.random.RandomState(99)
     features_b = np.vstack([
         rng.randn(5, 32).astype(np.float32) + 5,   # should be Round
         rng.randn(5, 32).astype(np.float32) - 5,   # should be Elongated
     ])
-    np.save(features_dir_b / "session_features.npy", features_b)
+    seed_features(sid_b, [s["id"] for s in samples_b], features_b, method="raw")
 
     # Apply model to session B
     resp = client.post(f"/models/{model_id}/apply", json={
@@ -390,10 +382,12 @@ def test_cross_session_feature_dim_mismatch(client, session_with_labeled_data, t
     }).json()
     sid_b = session_b["id"]
 
-    features_dir_b = Path(session_b["session_folder"]) / "features"
-    features_dir_b.mkdir(exist_ok=True)
-    np.save(features_dir_b / "session_features.npy",
-            np.random.randn(5, 16).astype(np.float32))  # 16-dim != 32-dim
+    samples_b = list_samples(client, sid_b)
+    seed_features(
+        sid_b, [s["id"] for s in samples_b],
+        np.random.randn(5, 16).astype(np.float32),  # 16-dim != 32-dim
+        method="raw",
+    )
 
     resp = client.post(f"/models/{model_id}/apply", json={
         "target_session_id": sid_b,

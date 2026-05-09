@@ -21,5 +21,6 @@ def export_session(
         data.include_classes,
         data.include_clusters,
         data.include_masks,
+        data.include_binary_masks,
         data.include_csv,
     )

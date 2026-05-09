@@ -5,7 +5,6 @@ class SampleOut(BaseModel):
     id: str
     filename: str
     path: str
-    storage_index: int
     is_active: bool
     class_id: str | None
     class_name: str | None

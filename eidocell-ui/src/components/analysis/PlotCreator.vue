@@ -111,7 +111,7 @@ async function create() {
         <label class="label p-0">
           <span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Bins</span>
         </label>
-        <span class="text-[10px] font-mono text-neutral font-bold">{{ numBins }}</span>
+        <span class="text-xs font-mono text-neutral font-bold">{{ numBins }}</span>
       </div>
       <input
         v-model.number="numBins"
@@ -120,7 +120,7 @@ async function create() {
         max="100"
         class="range range-xs range-neutral flex-1 transition-none"
       />
-      <div class="flex justify-between text-[9px] font-mono text-neutral/40 px-0.5 mt-1">
+      <div class="flex justify-between text-[10px] font-mono text-neutral/40 px-0.5 mt-1">
         <span>5</span>
         <span>100</span>
       </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Eye, Scissors, Merge } from 'lucide-vue-next'
+import { Eye, Scissors, Merge, Plus } from 'lucide-vue-next'
 import type { ClassOut } from '@/types'
 
 const props = defineProps<{
@@ -15,6 +15,7 @@ const emit = defineEmits<{
   split: [n: number]
   merge: []
   assignClass: [classId: string]
+  createClassAndAssign: []
   close: []
 }>()
 
@@ -69,7 +70,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
       <div v-else class="px-3 py-2 flex flex-col gap-2">
         <div class="flex items-center justify-between">
           <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/50">Split into</span>
-          <span class="text-[10px] font-mono font-bold">{{ splitCount }}</span>
+          <span class="text-xs font-mono font-bold">{{ splitCount }}</span>
         </div>
         <input
           v-model.number="splitCount"
@@ -97,28 +98,28 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
       </button>
     </template>
 
-    <!-- Assign to class (always when classes exist) -->
-    <template v-if="classes.length > 0">
-      <div class="border-t border-base-300 my-1"></div>
-      <div class="px-3 py-1.5">
-        <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/40">Assign to Class</span>
-      </div>
-      <div class="max-h-40 overflow-y-auto">
-        <button
-          v-for="cls in classes"
-          :key="cls.id"
-          class="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] font-mono font-bold tracking-widest uppercase hover:bg-neutral hover:text-neutral-content transition-colors text-left"
-          @click="emit('assignClass', cls.id); emit('close')"
-        >
-          <span class="w-2.5 h-2.5 rounded-[2px] shrink-0" :style="{ backgroundColor: cls.color }"></span>
-          {{ cls.name }}
-        </button>
-      </div>
-    </template>
-
-    <template v-if="classes.length === 0">
-      <div class="border-t border-base-300 my-1"></div>
-      <div class="px-3 py-2 text-[10px] font-mono text-neutral/30 tracking-wider">No classes defined</div>
-    </template>
+    <!-- Assign to class -->
+    <div class="border-t border-base-300 my-1"></div>
+    <div class="px-3 py-1.5">
+      <span class="text-[9px] font-bold tracking-widest uppercase text-neutral/40">Assign to Class</span>
+    </div>
+    <button
+      class="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] font-mono font-bold tracking-widest uppercase hover:bg-neutral hover:text-neutral-content transition-colors text-left"
+      @click="emit('createClassAndAssign'); emit('close')"
+    >
+      <Plus class="w-3.5 h-3.5 shrink-0 stroke-[2px]" />
+      New Class...
+    </button>
+    <div v-if="classes.length > 0" class="max-h-40 overflow-y-auto">
+      <button
+        v-for="cls in classes"
+        :key="cls.id"
+        class="w-full flex items-center gap-2.5 px-3 py-2 text-[11px] font-mono font-bold tracking-widest uppercase hover:bg-neutral hover:text-neutral-content transition-colors text-left"
+        @click="emit('assignClass', cls.id); emit('close')"
+      >
+        <span class="w-2.5 h-2.5 rounded-[2px] shrink-0" :style="{ backgroundColor: cls.color }"></span>
+        {{ cls.name }}
+      </button>
+    </div>
   </div>
 </template>

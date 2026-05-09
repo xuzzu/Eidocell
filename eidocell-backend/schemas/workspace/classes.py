@@ -30,3 +30,18 @@ class ClassStatistics(BaseModel):
     color: str
     sample_count: int
     attributes: list[AttributeStatistics]
+
+
+class AttributeDistribution(BaseModel):
+    name: str
+    bin_edges: list[float]
+    bin_counts: list[int]
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    std: float | None = None
+
+
+class SessionDistributions(BaseModel):
+    sample_count: int
+    attributes: list[AttributeDistribution]

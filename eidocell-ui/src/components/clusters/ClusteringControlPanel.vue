@@ -230,7 +230,7 @@ function refreshSelectedSnapshot() {
     <div v-if="!isEvoc" class="form-control">
       <div class="flex items-center justify-between pb-2">
         <label class="label p-0"><span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">K-Means Clusters</span></label>
-        <div class="text-[10px] font-mono text-neutral font-bold">{{ clusters.nClusters }}</div>
+        <div class="text-xs font-mono text-neutral font-bold">{{ clusters.nClusters }}</div>
       </div>
       <div class="flex items-center gap-3">
         <input

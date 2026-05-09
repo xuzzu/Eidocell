@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 class RunClusteringRequest(BaseModel):
     n_clusters: int = Field(10, ge=2, le=100)
+    feature_method: str = "mobilenetv3"
 
 
 class ClusteringScope(BaseModel):

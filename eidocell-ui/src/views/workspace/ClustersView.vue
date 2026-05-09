@@ -10,6 +10,7 @@ import ClusterCard from '@/components/clusters/ClusterCard.vue'
 import ClusterContextMenu from '@/components/clusters/ClusterContextMenu.vue'
 import ClusteringControlPanel from '@/components/clusters/ClusteringControlPanel.vue'
 import ClusterScatterPlot from '@/components/clusters/ClusterScatterPlot.vue'
+import ClassFormDialog from '@/components/classes/ClassFormDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import TaskProgressBar from '@/components/common/TaskProgressBar.vue'
 import SamplePreviewDialog from '@/components/common/SamplePreviewDialog.vue'
@@ -20,6 +21,8 @@ const clusters = useClustersStore()
 const gallery = useGalleryStore()
 const sessionStore = useSessionStore()
 const previewDialog = ref<InstanceType<typeof SamplePreviewDialog>>()
+const quickClassDialog = ref<InstanceType<typeof ClassFormDialog>>()
+const pendingClusterIds = ref<string[]>([])
 const gridContainer = ref<HTMLElement>()
 
 const SORT_OPTIONS: { value: ClusterSortMode; label: string }[] = [
@@ -92,6 +95,19 @@ function onContextmenu(e: MouseEvent, clusterId: string) {
 function onContextSplit(n: number) {
   const id = Array.from(clusters.selectedClusterIds)[0]
   if (id) clusters.splitCluster(id, n)
+}
+
+function onCreateClassAndAssign() {
+  pendingClusterIds.value = Array.from(clusters.selectedClusterIds)
+  quickClassDialog.value?.open()
+}
+
+async function onQuickClassSubmit(data: { name: string; color: string }) {
+  const ids = pendingClusterIds.value
+  pendingClusterIds.value = []
+  if (ids.length === 0) return
+  const cls = await gallery.createClass(data)
+  await clusters.assignToClass(ids, cls.id)
 }
 
 // Auto-scroll to the first newly-added cluster after merge/split.
@@ -205,7 +221,7 @@ watch(
             >
               <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
-            <span class="text-[10px] text-neutral/40 font-mono ml-auto">
+            <span class="text-xs text-neutral/40 font-mono ml-auto">
               {{ clusters.clusters.length }} clusters
             </span>
           </div>
@@ -251,10 +267,12 @@ watch(
       @split="onContextSplit"
       @merge="clusters.mergeClusters(Array.from(clusters.selectedClusterIds))"
       @assign-class="(id) => clusters.assignToClass(Array.from(clusters.selectedClusterIds), id)"
+      @create-class-and-assign="onCreateClassAndAssign"
       @close="ctxMenu.visible = false"
     />
 
     <SamplePreviewDialog ref="previewDialog" />
+    <ClassFormDialog ref="quickClassDialog" @submit="onQuickClassSubmit" />
   </div>
 </template>
 

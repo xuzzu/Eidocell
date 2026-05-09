@@ -4,27 +4,24 @@ These exist to remove the duplication between feature_extraction_service,
 dimensionality_reduction_service, and clustering_pipeline_service:
 
 - Session/sample validation, snapshotting for thread handoff
-- Mask preloading for morphological extraction
-- Streaming feature extraction into a memmap (bounds RSS, cleans up on cancel)
+- Mask attribute preloading for morphological extraction (from Lance)
+- Streaming feature extraction into the per-session LanceDB features table
 - Zero-variance column filtering
 - Thread-local DB session contextmanager (worker side)
 - Task progress contextmanager (worker side, replaces dead is_cancelled checks)
 """
 from __future__ import annotations
-from core.utils import npy_load
 
 import logging
-import os
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Callable, Iterator
 
-import cv2
 import numpy as np
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session as DbSession, sessionmaker
 
+from core.image_io import read as read_image
 from core.processors.errors import (
     ProcessorError,
     ProcessorInputError,
@@ -33,14 +30,16 @@ from core.processors.inference.feature_extraction import (
     FeatureExtractionProcessor,
     MorphologicalFeatureExtraction,
 )
+from core.storage import features as lance_features
+from core.storage import mask_attrs as lance_mask_attrs
 from core.task_manager import TaskCancelledException
 from core.utils import get_active_samples
-from models.models import Mask, Sample, SampleClass, Session
+from models.models import Sample, SampleClass, Session
 
 logger = logging.getLogger("eidocell.pipeline_utils")
 
-# Default flush interval for the streaming extractor.
-# Tunes the trade-off between disk I/O and RSS exposure on cancel.
+# Default flush interval for the streaming extractor. Tunes the trade-off
+# between Lance write throughput and how much in-flight work a cancel discards.
 DEFAULT_FLUSH_EVERY = 256
 
 
@@ -62,85 +61,67 @@ def validate_session_and_active_samples(
 
 def snapshot_samples(samples: list[Sample]) -> list[dict]:
     """Snapshot ORM rows into plain dicts so a worker thread can use them safely."""
-    return [
-        {"id": s.id, "path": s.path, "storage_index": s.storage_index}
-        for s in samples
-    ]
+    return [{"id": s.id, "path": s.path} for s in samples]
 
 
 def preload_morphological_masks(
-    db: DbSession, sample_data: list[dict], processor: FeatureExtractionProcessor
+    session_id: str,
+    sample_data: list[dict],
+    processor: FeatureExtractionProcessor,
 ) -> dict[str, dict]:
-    """If `processor` is morphological, eagerly load mask attributes keyed by sample id."""
+    """If `processor` is morphological, eagerly load attrs from Lance keyed by sample id."""
     if not isinstance(processor, MorphologicalFeatureExtraction):
         return {}
     sample_ids = [s["id"] for s in sample_data]
-    return {
-        m.sample_id: m.attributes
-        for m in db.query(Mask).filter(Mask.sample_id.in_(sample_ids)).all()
-        if m.attributes
-    }
+    bulk = lance_mask_attrs.get_attrs_bulk(session_id, sample_ids)
+    return {sid: attrs for sid, attrs in bulk.items() if attrs}
+
 
 def features_cached_for(
-    features_path: Path, sample_data: list[dict], feature_dim: int
+    session_id: str,
+    method: str,
+    sample_data: list[dict],
 ) -> bool:
-    """Return True if `features_path` has non-zero features for every active sample."""
-    if not features_path.exists():
-        return False
-    try:
-        existing = npy_load(features_path)
-    except Exception:
-        return False
-    max_index = max(s["storage_index"] for s in sample_data) + 1
-    if existing.ndim != 2 or existing.shape[0] < max_index or existing.shape[1] != feature_dim:
-        return False
-    indices = [s["storage_index"] for s in sample_data]
-    rows = existing[indices]
-    return bool(np.all(np.abs(rows).sum(axis=1) > 0))
+    """Return True if every sample has a feature row for this method."""
+    sample_ids = [s["id"] for s in sample_data]
+    if not sample_ids:
+        return True
+    have = lance_features.has_method(session_id, method, sample_ids)
+    return have >= set(sample_ids)
+
 
 # ── Streaming feature extraction ────────────────────────────────────────
 
 
-def extract_features_into(
+def extract_features_to_lance(
     *,
     sample_data: list[dict],
     processor: FeatureExtractionProcessor,
     masks: dict[str, dict],
-    features_path: Path,
+    session_id: str,
+    method: str,
     feature_dim: int,
     on_progress: Callable[[int, int, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     flush_every: int = DEFAULT_FLUSH_EVERY,
 ) -> tuple[int, int]:
-    """Extract features for all samples, streaming through a memmap.
+    """Extract features for all samples and stream them into LanceDB.
 
-    Writes to `<features_path>.tmp` while running, flushing every `flush_every`
-    samples to bound RSS. On success the temp file is atomically renamed to
-    `features_path`. On cancel/error the temp file is unlinked and the previous
-    `features_path` (if any) is left intact.
-
-    Returns (processed, skipped). Reasons for skipping a sample (bad input,
-    runtime failure, missing mask) are logged but never abort the run.
+    Buffers `flush_every` rows then upserts via merge_insert. On cancel/error
+    the partial batch is dropped; Lance MVCC keeps already-committed rows.
+    Returns (processed, skipped).
     """
-    features_path.parent.mkdir(parents=True, exist_ok=True)
-    max_index = max(s["storage_index"] for s in sample_data) + 1
-    tmp_path = features_path.with_suffix(features_path.suffix + ".tmp")
-
-    # Open a real .npy-format memmap (proper header) so the file is loadable by
-    # np.load on success without any post-processing. Seed it with previous
-    # features when compatible so unprocessed rows preserve their values.
-    memmap = np.lib.format.open_memmap(
-        tmp_path,
-        mode="w+",
-        dtype=np.float32,
-        shape=(max_index, feature_dim),
-    )
-    _seed_memmap_from_existing(features_path, memmap, max_index, feature_dim)
-
     is_morphological = isinstance(processor, MorphologicalFeatureExtraction)
     total = len(sample_data)
     processed = 0
     skipped = 0
+    buffer: list[dict] = []
+
+    def _flush():
+        nonlocal buffer
+        if buffer:
+            lance_features.upsert_features(session_id, method, buffer)
+            buffer = []
 
     try:
         if on_progress:
@@ -154,7 +135,7 @@ def extract_features_into(
                 if is_morphological:
                     features = processor.extract_from_attributes(masks.get(sd["id"]))
                 else:
-                    image = cv2.imread(sd["path"], cv2.IMREAD_UNCHANGED)
+                    image, _ = read_image(sd["path"])
                     if image is None:
                         raise ProcessorInputError(f"failed to read image {sd['path']}")
                     features = processor.extract(image)
@@ -162,61 +143,31 @@ def extract_features_into(
                 logger.warning("sample %s skipped: %s", sd["id"], e)
                 skipped += 1
             else:
-                memmap[sd["storage_index"]] = features
-                processed += 1
+                vec = np.asarray(features, dtype=np.float32).ravel()
+                if vec.shape[0] != feature_dim:
+                    logger.warning(
+                        "sample %s: dim mismatch %s vs %s; skipping",
+                        sd["id"], vec.shape[0], feature_dim,
+                    )
+                    skipped += 1
+                else:
+                    buffer.append({"sample_id": sd["id"], "vector": vec})
+                    processed += 1
 
-            if (i + 1) % flush_every == 0:
-                memmap.flush()
+            if len(buffer) >= flush_every:
+                _flush()
             if on_progress:
                 on_progress(i + 1, total, f"Processed {i + 1}/{total}")
 
-        memmap.flush()
-        # Drop the memmap before renaming so Windows-style file locks (and
-        # numpy's lazy file handles) release the temp path.
-        del memmap
-        os.replace(tmp_path, features_path)
+        _flush()
         logger.info(
             "Feature extraction complete: %d processed, %d skipped", processed, skipped
         )
         return processed, skipped
-
     except BaseException:
-        # Cancel, error, or process death: drop the memmap and unlink the temp
-        # file so the previous features.npy remains the source of truth.
-        try:
-            del memmap
-        except Exception:
-            pass
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            logger.exception("failed to clean up %s", tmp_path)
+        # Drop unflushed work; whatever made it to Lance stays committed.
+        buffer = []
         raise
-
-
-def _seed_memmap_from_existing(
-    features_path: Path,
-    memmap: np.ndarray,
-    max_index: int,
-    feature_dim: int,
-) -> None:
-    """Copy any compatible existing features into the freshly-allocated memmap."""
-    if not features_path.exists():
-        return
-    try:
-        existing = np.load(features_path, mmap_mode="r")
-    except Exception:
-        logger.warning("could not load existing features at %s; starting fresh", features_path)
-        return
-    if existing.ndim != 2 or existing.shape[1] != feature_dim:
-        logger.warning(
-            "existing features at %s have incompatible shape %s; starting fresh",
-            features_path,
-            existing.shape,
-        )
-        return
-    rows = min(existing.shape[0], max_index)
-    memmap[:rows] = existing[:rows]
 
 
 # ── Misc utilities ──────────────────────────────────────────────────────
@@ -240,11 +191,7 @@ def clean_zero_variance(
 
 @contextmanager
 def thread_db_session(db_url: str) -> Iterator[DbSession]:
-    """Open a fresh DB session bound to a new engine for use in a worker thread.
-
-    Always disposes the engine and closes the session, even on error. Use this
-    instead of hand-rolling create_engine/sessionmaker in every background worker.
-    """
+    """Open a fresh DB session bound to a new engine for use in a worker thread."""
     engine = create_engine(db_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
@@ -256,12 +203,7 @@ def thread_db_session(db_url: str) -> Iterator[DbSession]:
 
 
 class _TaskContext:
-    """Worker-side helper bundling progress updates and cooperative cancellation.
-
-    Replaces the pattern of manual `if is_cancelled(): pass` blocks scattered
-    through workers — call ctx.tick() at each iteration and ctx.stage() between
-    steps; both raise TaskCancelledException promptly if the task was cancelled.
-    """
+    """Worker-side helper bundling progress updates and cooperative cancellation."""
 
     def __init__(
         self,
@@ -282,7 +224,6 @@ class _TaskContext:
             raise TaskCancelledException("Task was cancelled")
 
     def stage(self, message: str, *, advance: int = 0) -> None:
-        """Mark progress for a coarse pipeline stage transition."""
         self._check_cancel()
         if advance:
             self.current += advance
@@ -290,7 +231,6 @@ class _TaskContext:
             self._on_progress(self.current, self.total or 1, message)
 
     def tick(self, current: int, message: str) -> None:
-        """Mark progress after processing a single item."""
         self._check_cancel()
         self.current = current
         if self._on_progress:
@@ -305,6 +245,7 @@ def task_context(
     total: int = 0,
 ) -> Iterator[_TaskContext]:
     yield _TaskContext(on_progress, is_cancelled, total=total)
+
 
 def project_to_2d(features: np.ndarray) -> np.ndarray:
     if features.shape[1] == 2:
@@ -338,9 +279,6 @@ def resolve_scoped_samples(
     )
 
     if mode == "unlabeled":
-        # Sessions auto-assign new samples to an "Uncategorized" class.
-        # An "unlabeled" sample is one with class_id IS NULL or pointing to
-        # that placeholder class.
         uncat = (
             db.query(SampleClass)
             .filter(
@@ -368,7 +306,7 @@ def resolve_scoped_samples(
     elif mode != "all":
         raise HTTPException(status_code=400, detail=f"Unknown scope mode: {mode}")
 
-    samples = q.order_by(Sample.storage_index).all()
+    samples = q.order_by(Sample.filename).all()
     if not samples:
         raise HTTPException(
             status_code=400,
@@ -399,7 +337,7 @@ __all__ = [
     "snapshot_samples",
     "preload_morphological_masks",
     "features_cached_for",
-    "extract_features_into",
+    "extract_features_to_lance",
     "clean_zero_variance",
     "thread_db_session",
     "task_context",

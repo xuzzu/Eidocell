@@ -13,7 +13,6 @@ const gallery = useGalleryStore()
 
 const zoomLevel = ref(3)
 const maskViewEnabled = ref(false)
-const inspectMode = ref(true)
 const similarityDialog = ref<InstanceType<typeof SimilaritySearchDialog> | null>(null)
 const dragTrigger = ref<HTMLDivElement | null>(null)
 
@@ -46,10 +45,10 @@ onUnmounted(() => {
         <FilterBar
           :zoom-level="zoomLevel"
           :mask-view="maskViewEnabled"
-          :inspect-mode="inspectMode"
+          :inspect-mode="gallery.inspectMode"
           @update:zoom-level="zoomLevel = $event"
           @update:mask-view="maskViewEnabled = $event"
-          @update:inspect-mode="inspectMode = $event"
+          @update:inspect-mode="gallery.inspectMode = $event"
         />
         <ClassAssignBar />
       </div>
@@ -64,7 +63,7 @@ onUnmounted(() => {
           v-else
           :zoom-level="zoomLevel"
           :mask-view="maskViewEnabled"
-          :inspect-mode="inspectMode"
+          :inspect-mode="gallery.inspectMode"
           :drag-trigger="dragTrigger"
           class="flex-1 overflow-hidden"
         />

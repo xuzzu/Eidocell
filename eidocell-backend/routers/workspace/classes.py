@@ -3,11 +3,18 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session as DbSession
 
 from db.session import get_db
-from schemas.workspace.classes import ClassSummary, ClassStatistics
+from schemas.workspace.classes import ClassSummary, ClassStatistics, SessionDistributions
 from schemas.workspace.gallery import SamplePage
 from services.workspace import classes_service
 
 router = APIRouter(prefix="/sessions/{session_id}/classes", tags=["classes"])
+
+
+@router.get("/distributions", response_model=SessionDistributions)
+def get_session_distributions(
+    session_id: str, db: DbSession = Depends(get_db)
+):
+    return classes_service.get_session_attribute_distributions(db, session_id)
 
 
 @router.get("/{class_id}/summary", response_model=ClassSummary)
