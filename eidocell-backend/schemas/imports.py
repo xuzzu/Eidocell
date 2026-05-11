@@ -5,9 +5,14 @@ from pydantic import BaseModel, Field, field_validator
 
 
 SourceKind = Literal["folder", "cif", "rif"]
-TargetShapeStrategy = Literal["none", "min", "max", "mean", "explicit"]
+TargetShapeStrategy = Literal[
+    "none", "min", "max", "mean", "explicit", "per_image_square"
+]
 NormalizeStrategy = Literal["none", "minmax", "zscore"]
 PaddingMethod = Literal["constant", "poisson", "replicate"]
+PostResizeStrategy = Literal[
+    "none", "explicit", "min_longest", "max_longest", "mean_longest"
+]
 
 
 class PreprocessingConfig(BaseModel):
@@ -24,6 +29,8 @@ class PreprocessingConfig(BaseModel):
     align_reference_index: int = 0
     align_upsample_factor: int = 10
     compensation_matrix: list[list[float]] | None = None
+    post_resize_strategy: PostResizeStrategy = "none"
+    post_resize_value: int | None = None
 
 
 class ImportCreate(BaseModel):
