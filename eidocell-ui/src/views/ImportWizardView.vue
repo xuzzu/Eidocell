@@ -410,6 +410,7 @@ onUnmounted(stopPolling)
               <option value="mean">Match average size</option>
               <option value="max">Match largest image</option>
               <option value="explicit">Specify exact shape</option>
+              <option value="per_image_square">Per-image square (pad to longest side)</option>
             </select>
           </div>
           <div v-if="preproc.target_shape_strategy === 'explicit'" class="flex gap-2">
@@ -428,7 +429,7 @@ onUnmounted(stopPolling)
           </div>
 
           <!-- Resize vs pad -->
-          <div v-if="preproc.target_shape_strategy !== 'none'">
+          <div v-if="preproc.target_shape_strategy !== 'none' && preproc.target_shape_strategy !== 'per_image_square'">
             <label class="flex items-center gap-3 text-sm cursor-pointer">
               <input type="checkbox" v-model="preproc.resize" class="checkbox checkbox-sm rounded-[2px]" />
               <span class="font-mono text-xs">Resize (otherwise pad)</span>
@@ -440,6 +441,39 @@ onUnmounted(stopPolling)
                 <option value="poisson">Poisson noise (recommended for IFC)</option>
                 <option value="replicate">Replicate edge</option>
               </select>
+            </div>
+          </div>
+
+          <!-- Per-image square: padding method + optional global resize -->
+          <div v-if="preproc.target_shape_strategy === 'per_image_square'" class="space-y-3">
+            <div>
+              <label class="label pb-1"><span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Padding method</span></label>
+              <select v-model="preproc.padding_method" class="select select-bordered rounded-[2px] w-full font-mono text-sm">
+                <option value="constant">Constant (zero)</option>
+                <option value="poisson">Poisson noise (recommended for IFC)</option>
+                <option value="replicate">Replicate edge</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="label pb-1"><span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Resize after</span></label>
+              <select v-model="preproc.post_resize_strategy" class="select select-bordered rounded-[2px] w-full font-mono text-sm">
+                <option value="none">None (keep per-image sizes)</option>
+                <option value="explicit">Specify N×N</option>
+                <option value="min_longest">Match smallest longest side</option>
+                <option value="mean_longest">Match mean longest side</option>
+                <option value="max_longest">Match largest longest side</option>
+              </select>
+            </div>
+
+            <div v-if="preproc.post_resize_strategy === 'explicit'" class="flex items-center gap-2">
+              <input
+                type="number" min="1" placeholder="N"
+                :value="preproc.post_resize_value ?? ''"
+                @input="preproc.post_resize_value = Number(($event.target as HTMLInputElement).value) || null"
+                class="input input-bordered rounded-[2px] w-32 font-mono text-sm focus:outline-neutral"
+              />
+              <span class="font-mono text-xs text-neutral/60">× N (square)</span>
             </div>
           </div>
 
@@ -511,8 +545,18 @@ onUnmounted(stopPolling)
           <dd class="col-span-2">
             <template v-if="!enablePreprocessing">skipped (raw arrays)</template>
             <template v-else>
-              {{ preproc.target_shape_strategy }} shape · {{ preproc.resize ? 'resize' : 'pad ' + preproc.padding_method }} ·
-              {{ preproc.normalize === 'none' ? 'no norm' : preproc.normalize }}
+              <template v-if="preproc.target_shape_strategy === 'per_image_square'">
+                per-image square · pad {{ preproc.padding_method }}
+                <template v-if="preproc.post_resize_strategy !== 'none'">
+                  · resize
+                  <template v-if="preproc.post_resize_strategy === 'explicit'">{{ preproc.post_resize_value ?? '?' }}×{{ preproc.post_resize_value ?? '?' }}</template>
+                  <template v-else>{{ preproc.post_resize_strategy.replace('_longest', '') }} longest</template>
+                </template>
+              </template>
+              <template v-else>
+                {{ preproc.target_shape_strategy }} shape · {{ preproc.resize ? 'resize' : 'pad ' + preproc.padding_method }}
+              </template>
+              · {{ preproc.normalize === 'none' ? 'no norm' : preproc.normalize }}
               <span v-if="preproc.align_channels"> · align</span>
             </template>
           </dd>
