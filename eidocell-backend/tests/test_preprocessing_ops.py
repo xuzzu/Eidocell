@@ -118,6 +118,30 @@ def test_resize_changes_shape_only():
     assert out.shape == (20, 30)
 
 
+def test_resize_handles_unsupported_dtype_int32():
+    """cv2.resize doesn't accept int32 directly — resize_to must cast safely."""
+    img = np.full((8, 8), 1000, dtype=np.int32)
+    out, _ = ops.resize_to(img, (16, 16))
+    assert out.shape == (16, 16)
+    assert out.dtype == np.int32
+    assert int(out.mean()) == 1000
+
+
+def test_resize_handles_unsupported_dtype_bool():
+    img = np.ones((4, 4), dtype=bool)
+    out, _ = ops.resize_to(img, (8, 8))
+    assert out.shape == (8, 8)
+    assert out.dtype == bool
+    assert out.all()
+
+
+def test_resize_multichannel_unsupported_dtype():
+    img = np.full((4, 6, 3), 500, dtype=np.int32)
+    out, _ = ops.resize_to(img, (8, 12))
+    assert out.shape == (8, 12, 3)
+    assert out.dtype == np.int32
+
+
 def test_align_channels_recovers_shift():
     """Synthetic shift across two channels — alignment must reduce centre-MAE."""
     rng = np.random.default_rng(0)

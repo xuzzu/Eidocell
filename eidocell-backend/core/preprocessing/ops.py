@@ -162,16 +162,31 @@ def pad_to_square(
     return pad_to(arr, (side, side), method=method, constant_value=constant_value)
 
 
+_CV2_RESIZE_DTYPES = {
+    np.dtype("uint8"), np.dtype("uint16"), np.dtype("int16"),
+    np.dtype("float32"), np.dtype("float64"),
+}
+
+
 def resize_to(arr: np.ndarray, target_shape: tuple[int, int]) -> tuple[np.ndarray, dict]:
-    """Bilinear resize per channel to ``target_shape`` (H, W)."""
+    """Bilinear resize per channel to ``target_shape`` (H, W).
+
+    cv2.resize only accepts a narrow set of dtypes (uint8/uint16/int16/float32/
+    float64). For anything else (int32, bool, float16, etc.) we work in float32
+    and cast back to the original dtype.
+    """
     img, was_2d = _ensure_hwc(arr)
     h, w, c = img.shape
     th, tw = target_shape
     if (h, w) == (th, tw):
         return _restore(img, was_2d), {"target": [th, tw], "skipped": True}
-    out = np.empty((th, tw, c), dtype=img.dtype)
+    original_dtype = img.dtype
+    work = img if original_dtype in _CV2_RESIZE_DTYPES else img.astype(np.float32, copy=False)
+    out = np.empty((th, tw, c), dtype=work.dtype)
     for k in range(c):
-        out[:, :, k] = cv2.resize(img[:, :, k], (tw, th), interpolation=cv2.INTER_LINEAR)
+        out[:, :, k] = cv2.resize(work[:, :, k], (tw, th), interpolation=cv2.INTER_LINEAR)
+    if out.dtype != original_dtype:
+        out = out.astype(original_dtype, copy=False)
     return _restore(out, was_2d), {"target": [th, tw], "skipped": False}
 
 
