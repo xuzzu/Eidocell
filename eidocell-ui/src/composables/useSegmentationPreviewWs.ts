@@ -12,6 +12,7 @@ export interface PreviewRequest {
   method: string
   params: Record<string, number>
   sampleIds: string[]
+  channelIndex?: number
 }
 
 interface FrameHeader {
@@ -156,6 +157,7 @@ export function useSegmentationPreviewWs(getSessionId: () => string | null) {
       method: req.method,
       params: req.params,
       sample_ids: req.sampleIds,
+      channel_index: req.channelIndex ?? 0,
     }))
   }
 

@@ -111,6 +111,15 @@ ipcMain.handle("select-directory", async () => {
   const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
   return result.filePaths[0] ?? null;
 });
+ipcMain.handle("select-file", async (_event, options) => {
+  var _a;
+  const filters = ((_a = options == null ? void 0 : options.extensions) == null ? void 0 : _a.length) ? [{ name: options.name ?? "Files", extensions: options.extensions }] : void 0;
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters
+  });
+  return result.filePaths[0] ?? null;
+});
 app.whenReady().then(() => {
   pythonManager.start();
   createWindow();

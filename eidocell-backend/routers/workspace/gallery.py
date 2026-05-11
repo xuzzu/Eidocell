@@ -45,9 +45,14 @@ def get_sample(session_id: str, sample_id: str, db: DbSession = Depends(get_db))
 
 
 @router.get("/samples/{sample_id}/image")
-def get_sample_image(session_id: str, sample_id: str, db: DbSession = Depends(get_db)):
-    """Serve the original image file."""
-    path = gallery_service.get_image_path(db, sample_id)
+def get_sample_image(
+    session_id: str,
+    sample_id: str,
+    channel: int | None = None,
+    db: DbSession = Depends(get_db),
+):
+    """Serve the original full-resolution image, optionally a single channel."""
+    path = gallery_service.get_image_path(db, sample_id, channel=channel)
     return FileResponse(path)
 
 
@@ -63,9 +68,28 @@ def get_sample_thumbnail(
     return FileResponse(path, media_type="image/jpeg")
 
 
-@router.get("/sortable-attributes", response_model=list[str])
+@router.get("/samples/{sample_id}/channel/{channel}/thumbnail")
+def get_sample_channel_thumbnail(
+    session_id: str,
+    sample_id: str,
+    channel: int,
+    db: DbSession = Depends(get_db),
+):
+    """Serve a JPEG thumbnail of a single channel of a multi-channel sample."""
+    session = session_service.get_session(db, session_id)
+    path = gallery_service.get_channel_thumbnail_path(
+        db, sample_id, session.session_folder, channel
+    )
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/sortable-attributes")
 def list_sortable_attributes(session_id: str, db: DbSession = Depends(get_db)):
-    """List mask attribute names available for sorting."""
+    """List mask attribute / channel pairs available for sorting.
+
+    Each item: ``{name, channel_index, channel_name, value}`` — ``value`` is the
+    raw sort_by token (e.g. ``attr:area:ch:0``).
+    """
     return gallery_service.list_sortable_attributes(db, session_id)
 
 

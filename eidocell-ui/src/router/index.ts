@@ -43,6 +43,12 @@ const router = createRouter({
             component: () => import('../views/SessionsView.vue'),
         },
         {
+            path: '/import/:sessionId',
+            name: 'import-wizard',
+            component: () => import('../views/ImportWizardView.vue'),
+            props: true,
+        },
+        {
             path: '/export',
             name: 'export',
             component: () => import('../views/ExportView.vue'),

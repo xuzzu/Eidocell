@@ -34,7 +34,9 @@ def run_segmentation(
     db: DbSession = Depends(get_db),
 ):
     """Run segmentation on all active samples (synchronous)."""
-    return segmentation_service.run_segmentation(db, session_id, data.method, data.params)
+    return segmentation_service.run_segmentation(
+        db, session_id, data.method, data.params, channel_index=data.channel_index,
+    )
 
 
 @router.post("/segmentation/preview", response_model=SegmentationResult)
@@ -44,7 +46,10 @@ def run_segmentation_preview(
     db: DbSession = Depends(get_db),
 ):
     """Run segmentation on specific samples (for live preview)."""
-    return segmentation_service.run_segmentation_preview(db, session_id, data.method, data.params, data.sample_ids)
+    return segmentation_service.run_segmentation_preview(
+        db, session_id, data.method, data.params, data.sample_ids,
+        channel_index=data.channel_index,
+    )
 
 
 @router.post("/segmentation/run-async")
@@ -54,16 +59,21 @@ def run_segmentation_async(
     db: DbSession = Depends(get_db),
 ):
     """Start segmentation as a background task. Returns task ID."""
-    task_id = segmentation_service.run_segmentation_async(db, session_id, data.method, data.params)
+    task_id = segmentation_service.run_segmentation_async(
+        db, session_id, data.method, data.params, channel_index=data.channel_index,
+    )
     return {"task_id": task_id}
 
 
 @router.get("/samples/{sample_id}/mask/attributes")
 def get_mask_attributes(
-    session_id: str, sample_id: str, db: DbSession = Depends(get_db)
+    session_id: str,
+    sample_id: str,
+    channel: int = 0,
+    db: DbSession = Depends(get_db),
 ):
-    """Get computed mask attributes for a sample."""
-    return segmentation_service.get_mask_attributes(db, sample_id)
+    """Get computed mask attributes for a sample/channel."""
+    return segmentation_service.get_mask_attributes(db, sample_id, channel_index=channel)
 
 
 @router.websocket("/segmentation/preview/ws")
@@ -83,12 +93,12 @@ async def segmentation_preview_ws(websocket: WebSocket, session_id: str):
     await websocket.accept()
     in_flight: asyncio.Task | None = None
 
-    async def stream(request_id: int, method: str, params: dict, sample_ids: list[str]):
+    async def stream(request_id: int, method: str, params: dict, sample_ids: list[str], channel_index: int):
         loop = asyncio.get_running_loop()
         db = SessionLocal()
         try:
             gen = segmentation_service.stream_preview_overlays(
-                db, session_id, method, params, sample_ids
+                db, session_id, method, params, sample_ids, channel_index=channel_index,
             )
 
             def _next():
@@ -139,6 +149,7 @@ async def segmentation_preview_ws(websocket: WebSocket, session_id: str):
             method = msg.get("method")
             params = msg.get("params") or {}
             sample_ids = msg.get("sample_ids") or []
+            channel_index = int(msg.get("channel_index", 0))
             request_id = int(msg.get("request_id", 0))
             if not method or not sample_ids:
                 await websocket.send_text(json.dumps({
@@ -155,7 +166,7 @@ async def segmentation_preview_ws(websocket: WebSocket, session_id: str):
                 except (asyncio.CancelledError, Exception):
                     pass
 
-            in_flight = asyncio.create_task(stream(request_id, method, params, sample_ids))
+            in_flight = asyncio.create_task(stream(request_id, method, params, sample_ids, channel_index))
     except WebSocketDisconnect:
         if in_flight and not in_flight.done():
             in_flight.cancel()
@@ -164,15 +175,18 @@ async def segmentation_preview_ws(websocket: WebSocket, session_id: str):
 
 @router.get("/samples/{sample_id}/mask/overlay")
 def get_mask_overlay(
-    session_id: str, sample_id: str, db: DbSession = Depends(get_db)
+    session_id: str,
+    sample_id: str,
+    channel: int = 0,
+    db: DbSession = Depends(get_db),
 ):
-    """Serve the mask overlay image.
+    """Serve the mask overlay image for a sample/channel.
 
     `no-cache` forces the browser to revalidate every request; FileResponse
     sets ETag from file mtime+size, so unchanged files return 304 cheaply
     while re-segmentation invalidates the cache automatically.
     """
-    path = segmentation_service.get_mask_overlay_path(db, sample_id)
+    path = segmentation_service.get_mask_overlay_path(db, sample_id, channel_index=channel)
     return FileResponse(
         path,
         media_type="image/png",

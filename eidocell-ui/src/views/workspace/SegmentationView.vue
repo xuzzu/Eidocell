@@ -63,6 +63,22 @@ function onComplete() {
       <div class="w-80 min-w-[320px] bg-base-100 border-r border-base-300 p-6 flex flex-col gap-6 overflow-y-auto z-10 shadow-sm shrink-0">
         <h2 class="text-[14px] font-bold tracking-widest uppercase">Segmentation</h2>
 
+        <div v-if="gallery.sessionChannelCount > 1">
+          <label class="text-[10px] font-bold tracking-widest uppercase text-neutral/70 block mb-2">Channel</label>
+          <select
+            class="select select-bordered select-sm rounded-[2px] w-full font-mono text-xs focus:outline-neutral"
+            :value="segStore.channelIndex"
+            @change="segStore.setChannelIndex(Number(($event.target as HTMLSelectElement).value))"
+          >
+            <option
+              v-for="(name, idx) in gallery.sessionChannelNames"
+              :key="idx"
+              :value="idx"
+            >{{ name }} (ch{{ idx }})</option>
+          </select>
+          <p class="text-[10px] font-mono text-neutral/50 mt-1">Mask + attributes will be computed for this channel.</p>
+        </div>
+
         <MethodSelector />
 
         <div class="space-y-3 pt-2">

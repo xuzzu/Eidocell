@@ -10,6 +10,8 @@ class SampleOut(BaseModel):
     class_name: str | None
     class_color: str | None
     has_mask: bool
+    mask_channels: list[int] = []
+    n_channels: int = 1
 
     model_config = {"from_attributes": True}
 

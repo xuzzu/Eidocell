@@ -14,7 +14,7 @@ from core.config import (
     STORAGE_VERSION_FILE,
 )
 from db.session import engine, Base
-from routers import sessions, features, export, settings, tasks, learning, notifications
+from routers import sessions, features, export, settings, tasks, learning, notifications, imports as imports_router
 from routers.workspace import gallery, classes, clusters, segmentation, analysis, similarity
 
 logger = logging.getLogger("eidocell.storage")
@@ -86,6 +86,7 @@ app.include_router(settings.router)
 app.include_router(tasks.router)
 app.include_router(learning.router)
 app.include_router(notifications.router)
+app.include_router(imports_router.router)
 
 
 

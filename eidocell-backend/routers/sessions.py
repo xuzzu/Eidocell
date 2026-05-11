@@ -27,6 +27,16 @@ def get_session(session_id: str, db: DbSession = Depends(get_db)):
     return _session_to_out(session, count)
 
 
+@router.get("/{session_id}/preview-status")
+def preview_status(session_id: str, db: DbSession = Depends(get_db)):
+    """Return whether all previews are pregenerated for the session.
+
+    Used by the session-open UI to block until the import + pregen pipeline
+    finishes. Shape: ``{ready: bool, progress: float, message: str, phase: str}``.
+    """
+    return session_service.preview_status(db, session_id)
+
+
 @router.patch("/{session_id}", response_model=SessionOut)
 def update_session(session_id: str, data: SessionUpdate, db: DbSession = Depends(get_db)):
     session = session_service.update_session(db, session_id, data)
@@ -43,11 +53,13 @@ def _session_to_out(session, sample_count: int) -> dict:
     return {
         "id": session.id,
         "name": session.name,
-        "images_directory": session.images_directory,
+        "images_directory": session.images_directory or None,
         "session_folder": session.session_folder,
         "created_at": session.created_at,
         "last_opened_at": session.last_opened_at,
         "scale_factor": session.scale_factor,
         "scale_units": session.scale_units,
+        "channel_count": session.channel_count,
+        "channel_names": session.channel_names,
         "sample_count": sample_count,
     }

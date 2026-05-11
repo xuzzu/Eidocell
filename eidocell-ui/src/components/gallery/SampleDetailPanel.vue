@@ -15,14 +15,27 @@ const showOverlay = ref(false)
 const attributes = ref<Record<string, number> | null>(null)
 const panelRef = ref<HTMLElement>()
 
-watch(sample, async (s) => {
-  showOverlay.value = false
+const isMulti = computed(() => (sample.value?.n_channels ?? 1) > 1)
+const channelHasMask = computed(() =>
+  !!sample.value?.mask_channels?.includes(gallery.detailChannel),
+)
+
+async function loadAttrs() {
   attributes.value = null
-  if (s?.has_mask) {
-    try {
-      attributes.value = await getMaskAttributes(sid.value, s.id)
-    } catch { /* no mask */ }
-  }
+  if (!sample.value || !channelHasMask.value) return
+  try {
+    attributes.value = await getMaskAttributes(sid.value, sample.value.id, gallery.detailChannel)
+  } catch { /* no mask */ }
+}
+
+watch(sample, () => {
+  showOverlay.value = false
+  loadAttrs()
+})
+
+watch(() => gallery.detailChannel, () => {
+  showOverlay.value = false
+  loadAttrs()
 })
 
 function close() {
@@ -40,8 +53,11 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
 const imageSource = computed(() => {
   if (!sample.value) return ''
-  if (showOverlay.value && sample.value.has_mask) {
-    return maskOverlayUrl(sid.value, sample.value.id, gallery.maskVersion)
+  if (showOverlay.value && channelHasMask.value) {
+    return maskOverlayUrl(sid.value, sample.value.id, gallery.maskVersion, gallery.detailChannel)
+  }
+  if (isMulti.value) {
+    return sampleImageUrl(sid.value, sample.value.id, gallery.detailChannel)
   }
   return sampleImageUrl(sid.value, sample.value.id)
 })
@@ -66,11 +82,30 @@ const attrEntries = computed(() => {
       </div>
 
       <div class="px-6 py-6 flex-1 overflow-y-auto space-y-8 text-neutral">
+        <!-- Channel picker (multi-channel sessions only) -->
+        <div v-if="isMulti" class="space-y-2">
+          <span class="text-[10px] font-bold tracking-widest uppercase text-neutral/60">Channel</span>
+          <div class="flex flex-wrap gap-1">
+            <button
+              v-for="(name, idx) in gallery.sessionChannelNames.slice(0, sample.n_channels)"
+              :key="idx"
+              class="h-7 px-2 text-[10px] font-mono rounded-[2px] transition-colors flex items-center gap-1.5"
+              :class="gallery.detailChannel === idx
+                ? 'bg-neutral text-neutral-content'
+                : 'bg-base-200 hover:bg-neutral/10 text-neutral/80'"
+              @click="gallery.detailChannel = idx"
+            >
+              <span>{{ name }}</span>
+              <span v-if="sample.mask_channels?.includes(idx)" class="w-1.5 h-1.5 rounded-full bg-success" title="Has mask" />
+            </button>
+          </div>
+        </div>
+
         <!-- Image display -->
         <div class="relative bg-base-200 p-2 rounded-[2px] border border-base-300">
           <img :src="imageSource" class="w-full aspect-square object-contain bg-white" />
           <button
-            v-if="sample.has_mask"
+            v-if="channelHasMask"
             class="h-8 px-3 flex items-center gap-2 absolute top-4 right-4 bg-neutral text-neutral-content rounded-[2px] text-[10px] font-bold tracking-widest uppercase transition-opacity hover:opacity-80 shadow-md"
             @click="showOverlay = !showOverlay"
           >

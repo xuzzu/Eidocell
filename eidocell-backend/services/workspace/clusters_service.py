@@ -190,7 +190,7 @@ def get_cluster_samples(
             "class_id": s.class_id,
             "class_name": s.sample_class.name if s.sample_class else None,
             "class_color": s.sample_class.color if s.sample_class else None,
-            "has_mask": s.mask is not None,
+            "has_mask": len(s.masks) > 0,
         })
     return items, total
 
@@ -461,6 +461,17 @@ def get_or_generate_collage(db: DbSession, cluster_id: str) -> Path:
         .limit(MAX_COLLAGE_SAMPLES)
         .all()
     )
-    image_paths = [Path(s.path) for s in samples]
+    # Prefer the pre-generated channel-0 thumbnail (default brightfield channel).
+    thumb_dir = Path(session.session_folder) / "previews" / "thumbnails"
+    image_paths: list[Path] = []
+    for s in samples:
+        ch0 = thumb_dir / f"{s.id}_ch0.jpg"
+        combined = thumb_dir / f"{s.id}.jpg"
+        if ch0.is_file():
+            image_paths.append(ch0)
+        elif combined.is_file():
+            image_paths.append(combined)
+        elif s.path:
+            image_paths.append(Path(s.path))
     generate_collage(image_paths, collage_path)
     return collage_path

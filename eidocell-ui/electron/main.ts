@@ -69,6 +69,17 @@ ipcMain.handle('select-directory', async () => {
   return result.filePaths[0] ?? null
 })
 
+ipcMain.handle('select-file', async (_event, options?: { extensions?: string[]; name?: string }) => {
+  const filters = options?.extensions?.length
+    ? [{ name: options.name ?? 'Files', extensions: options.extensions }]
+    : undefined
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters,
+  })
+  return result.filePaths[0] ?? null
+})
+
 app.whenReady().then(() => {
   pythonManager.start()
   createWindow()

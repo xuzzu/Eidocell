@@ -1,0 +1,151 @@
+"""Composable preprocessing pipeline.
+
+Builds an ordered list of (op_callable, params) from a user-friendly config
+dict (the ``PreprocessingConfig`` from the import wizard) and applies it to
+each image. ``apply`` returns ``(image, metadata)`` so the import service can
+record per-step parameters and stats in ``preprocessing_metadata.json``.
+"""
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import Callable
+
+import numpy as np
+
+from core.preprocessing import ops as _ops
+
+
+StepFn = Callable[..., "tuple[np.ndarray, dict]"]
+
+
+@dataclass
+class Step:
+    name: str
+    fn: StepFn
+    params: dict
+
+
+@dataclass
+class Pipeline:
+    pipeline_id: str
+    steps: list[Step]
+    target_shape: tuple[int, int] | None = None
+    config: dict = field(default_factory=dict)
+
+    def apply(self, arr: np.ndarray) -> tuple[np.ndarray, dict]:
+        history: list[dict] = []
+        cur = arr
+        for step in self.steps:
+            params = dict(step.params)
+            cur, meta = step.fn(cur, **params)
+            history.append({"step": step.name, "params": params, "metadata": meta})
+        return cur, {
+            "pipeline_id": self.pipeline_id,
+            "input_shape": list(arr.shape),
+            "output_shape": list(cur.shape),
+            "steps": history,
+        }
+
+
+def _resolve_target_shape(strategy: str, explicit: tuple[int, int] | None, summary: dict | None) -> tuple[int, int] | None:
+    if strategy == "explicit":
+        if explicit is None:
+            raise ValueError("explicit_shape required when target_shape_strategy='explicit'")
+        return tuple(explicit)
+    if not summary:
+        return None
+    if strategy == "min":
+        return (summary["min_h"], summary["min_w"])
+    if strategy == "max":
+        return (summary["max_h"], summary["max_w"])
+    if strategy == "mean":
+        return (summary["mean_h"], summary["mean_w"])
+    raise ValueError(f"unknown target_shape_strategy '{strategy}'")
+
+
+def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeline:
+    """Build a Pipeline from the wizard's PreprocessingConfig dict.
+
+    Recognised keys:
+        target_shape_strategy: "min" | "max" | "mean" | "explicit" | "none"
+        explicit_shape: [int, int] | None
+        padding_method: "constant" | "poisson" | "replicate"
+        resize: bool
+        normalize: "none" | "minmax" | "zscore"
+        align_channels: bool
+        align_reference_index: int
+        compensation_matrix: list[list[float]] | None
+    """
+    steps: list[Step] = []
+    cfg = dict(config or {})
+    strategy = cfg.get("target_shape_strategy", "none")
+    explicit = cfg.get("explicit_shape")
+    target = None
+    if strategy != "none":
+        target = _resolve_target_shape(
+            strategy,
+            tuple(explicit) if explicit else None,
+            shape_summary,
+        )
+
+    if cfg.get("background_subtraction"):
+        steps.append(Step(
+            name="background_subtraction",
+            fn=_ops.background_subtraction,
+            params={
+                "radius": int(cfg.get("background_subtraction_radius", 50)),
+                "per_channel": bool(cfg.get("background_subtraction_per_channel", True))
+            },
+        ))
+
+    if cfg.get("align_channels"):
+        steps.append(Step(
+            name="align_channels",
+            fn=_ops.align_channels,
+            params={
+                "reference_index": int(cfg.get("align_reference_index", 0)),
+                "upsample_factor": int(cfg.get("align_upsample_factor", 10)),
+            },
+        ))
+
+    if cfg.get("compensation_matrix"):
+        steps.append(Step(
+            name="compensate",
+            fn=_ops.compensate,
+            params={"matrix": cfg["compensation_matrix"]},
+        ))
+
+    if target is not None:
+        if cfg.get("resize"):
+            steps.append(Step(
+                name="resize_to",
+                fn=_ops.resize_to,
+                params={"target_shape": target},
+            ))
+        else:
+            steps.append(Step(
+                name="pad_to",
+                fn=_ops.pad_to,
+                params={
+                    "target_shape": target,
+                    "method": cfg.get("padding_method", "constant"),
+                },
+            ))
+
+    norm = cfg.get("normalize", "none")
+    if norm == "minmax":
+        steps.append(Step(name="normalize_minmax", fn=_ops.normalize_minmax, params={
+            "per_channel": bool(cfg.get("normalize_per_channel", True)),
+        }))
+    elif norm == "zscore":
+        steps.append(Step(name="normalize_zscore", fn=_ops.normalize_zscore, params={
+            "per_channel": bool(cfg.get("normalize_per_channel", True)),
+        }))
+
+    return Pipeline(
+        pipeline_id=uuid.uuid4().hex[:12],
+        steps=steps,
+        target_shape=target,
+        config=cfg,
+    )

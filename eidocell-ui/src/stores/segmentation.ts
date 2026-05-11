@@ -10,6 +10,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
   const methods = ref<SegmentationMethod[]>([])
   const selectedMethod = ref('otsu_intensity')
   const params = ref<Record<string, number>>({})
+  const channelIndex = ref(0)
   const taskId = ref<string | null>(null)
   const loading = ref(false)
 
@@ -17,8 +18,13 @@ export const useSegmentationStore = defineStore('segmentation', () => {
     methods.value = []
     selectedMethod.value = 'otsu_intensity'
     params.value = {}
+    channelIndex.value = 0
     taskId.value = null
     loading.value = false
+  }
+
+  function setChannelIndex(idx: number) {
+    channelIndex.value = idx
   }
 
   async function fetchMethods() {
@@ -54,6 +60,7 @@ export const useSegmentationStore = defineStore('segmentation', () => {
       const result = await segApi.runSegmentationAsync(sessionStore.currentSessionId, {
         method: selectedMethod.value,
         params: params.value,
+        channel_index: channelIndex.value,
       })
       taskId.value = result.task_id
     } catch {
@@ -67,8 +74,8 @@ export const useSegmentationStore = defineStore('segmentation', () => {
   }
 
   return {
-    methods, selectedMethod, params, taskId, loading,
+    methods, selectedMethod, params, channelIndex, taskId, loading,
     $reset,
-    fetchMethods, selectMethod, runSegmentation, onTaskComplete,
+    fetchMethods, selectMethod, setChannelIndex, runSegmentation, onTaskComplete,
   }
 })

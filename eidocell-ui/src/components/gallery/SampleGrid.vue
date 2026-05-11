@@ -40,8 +40,8 @@ function onScroll() {
   }
 }
 
-function onCardInspect(sample: SampleOut) {
-  gallery.detailSample = sample
+function onCardInspect(sample: SampleOut, channelIndex?: number) {
+  gallery.openDetail(sample, channelIndex ?? 0)
 }
 
 // Drag selection. Listen on the wider `dragTrigger` element (e.g. the gallery

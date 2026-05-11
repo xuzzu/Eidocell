@@ -72,6 +72,7 @@ function triggerPreview() {
       method: segStore.selectedMethod,
       params: { ...segStore.params },
       sampleIds: previewSamples.value.map((s) => s.id),
+      channelIndex: segStore.channelIndex,
     }).catch(() => {
       // surfaced via ws.error
     })
@@ -86,7 +87,7 @@ onMounted(async () => {
 })
 
 watch(
-  () => ({ ...segStore.params, method: segStore.selectedMethod }),
+  () => ({ ...segStore.params, method: segStore.selectedMethod, channel: segStore.channelIndex }),
   () => triggerPreview(),
   { deep: true },
 )

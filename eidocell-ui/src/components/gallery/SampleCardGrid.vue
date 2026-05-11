@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import { sampleThumbnailUrl } from '@/api/gallery'
+import { useGalleryStore } from '@/stores/gallery'
+import { sampleChannelThumbnailUrl, sampleThumbnailUrl } from '@/api/gallery'
 import { maskOverlayUrl } from '@/api/segmentation'
 import type { SampleOut } from '@/types'
 
@@ -21,11 +22,12 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:selectedIds': [ids: Set<string>]
-  inspect: [sample: SampleOut]
+  inspect: [sample: SampleOut, channelIndex?: number]
   contextmenu: [event: MouseEvent, sampleId: string]
 }>()
 
 const sessionStore = useSessionStore()
+const gallery = useGalleryStore()
 const sid = computed(() => sessionStore.currentSessionId!)
 
 // Anchor for shift-click range selection: the last id the user clicked
@@ -44,20 +46,63 @@ const colsClass = computed(() => {
   return map[props.zoomLevel] ?? map[3]
 })
 
+// In multi-channel display mode each sample claims a full row so its channels
+// are distributed evenly across the entire gallery width (rather than packed
+// into a single grid cell).
+const useFullWidthRows = computed(() =>
+  gallery.channelDisplayMode === 'multi' && gallery.sessionChannelCount > 1,
+)
+
 function isSelected(id: string) {
   return props.selectedIds.has(id)
 }
 
-function getImageSrc(sample: SampleOut) {
-  if (props.maskView && sample.has_mask) {
-    return maskOverlayUrl(sid.value, sample.id, props.maskVersion)
-  }
-  return sampleThumbnailUrl(sid.value, sample.id)
+function activeChannel(sample: SampleOut): number {
+  const n = sample.n_channels ?? 1
+  const c = gallery.selectedChannel
+  return Math.max(0, Math.min(c, n - 1))
 }
 
-function onClick(sample: SampleOut) {
+function maskChannel(sample: SampleOut): number {
+  if (!sample.mask_channels || sample.mask_channels.length === 0) return 0
+  const ac = activeChannel(sample)
+  if (sample.mask_channels.includes(ac)) return ac
+  return sample.mask_channels[0]
+}
+
+function singleChannelSrc(sample: SampleOut) {
+  if (props.maskView && sample.has_mask) {
+    return maskOverlayUrl(sid.value, sample.id, props.maskVersion, maskChannel(sample))
+  }
+  const n = sample.n_channels ?? 1
+  if (n <= 1) return sampleThumbnailUrl(sid.value, sample.id)
+  return sampleChannelThumbnailUrl(sid.value, sample.id, activeChannel(sample))
+}
+
+function channelStrip(sample: SampleOut): number[] {
+  const n = sample.n_channels ?? 1
+  const wanted = gallery.selectedChannels.length > 0
+    ? gallery.selectedChannels
+    : Array.from({ length: n }, (_, i) => i)
+  return wanted.filter(c => c >= 0 && c < n)
+}
+
+function showChannelStrip(sample: SampleOut): boolean {
+  if (props.maskView && sample.has_mask) return false
+  if (gallery.channelDisplayMode !== 'multi') return false
+  return (sample.n_channels ?? 1) > 1 && channelStrip(sample).length > 0
+}
+
+function channelSrc(sample: SampleOut, channel: number) {
+  if (props.maskView && sample.mask_channels?.includes(channel)) {
+    return maskOverlayUrl(sid.value, sample.id, props.maskVersion, channel)
+  }
+  return sampleChannelThumbnailUrl(sid.value, sample.id, channel)
+}
+
+function onClick(sample: SampleOut, channelIndex?: number) {
   if (props.inspectMode) {
-    emit('inspect', sample)
+    emit('inspect', sample, channelIndex)
     return
   }
   anchorId.value = sample.id
@@ -98,7 +143,7 @@ function rangeSelect(targetId: string) {
 </script>
 
 <template>
-  <div class="grid gap-2" :class="colsClass">
+  <div class="grid gap-2" :class="useFullWidthRows ? 'grid-cols-1' : colsClass">
     <div
       v-for="sample in samples"
       :key="sample.id"
@@ -117,9 +162,37 @@ function rangeSelect(targetId: string) {
       >
         {{ sample.filename }}
       </div>
-      <div class="w-full aspect-square relative bg-base-200 flex items-center justify-center">
+      <div
+        v-if="showChannelStrip(sample)"
+        class="w-full relative bg-base-200 grid gap-px"
+        :style="{ gridTemplateColumns: `repeat(${channelStrip(sample).length}, minmax(0, 1fr))` }"
+        @click.exact.stop
+        @click.shift.exact.stop
+      >
+        <div
+          v-for="c in channelStrip(sample)"
+          :key="c"
+          class="relative aspect-square bg-base-300 cursor-pointer"
+          @click.exact.stop="onClick(sample, c)"
+          @click.shift.exact.stop="rangeSelect(sample.id)"
+          @click.ctrl.stop="toggle(sample.id)"
+          @click.meta.stop="toggle(sample.id)"
+        >
+          <img
+            :src="channelSrc(sample, c)"
+            :alt="`${sample.filename} ${gallery.sessionChannelNames[c] ?? 'ch' + (c + 1)}`"
+            class="absolute inset-0 w-full h-full object-contain"
+            loading="lazy"
+          />
+          <div class="absolute bottom-0 right-0 px-1 text-[8px] font-mono text-white/80 bg-black/40 leading-none py-[1px]">
+            {{ gallery.sessionChannelNames[c] ?? c + 1 }}
+          </div>
+        </div>
+        <slot name="badge" :sample="sample" />
+      </div>
+      <div v-else class="w-full aspect-square relative bg-base-200 flex items-center justify-center">
         <img
-          :src="getImageSrc(sample)"
+          :src="singleChannelSrc(sample)"
           :alt="sample.filename"
           class="absolute inset-0 w-full h-full object-contain"
           loading="lazy"

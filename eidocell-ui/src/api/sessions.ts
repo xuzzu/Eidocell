@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from './client'
-import type { SessionCreate, SessionUpdate, SessionListItem, SessionOut } from '@/types'
+import type { SessionCreate, SessionUpdate, SessionListItem, SessionOut, PreviewStatus } from '@/types'
 
 export const listSessions = () =>
   apiGet<SessionListItem[]>('/sessions/')
@@ -15,3 +15,6 @@ export const updateSession = (id: string, data: SessionUpdate) =>
 
 export const deleteSession = (id: string) =>
   apiDelete(`/sessions/${id}`)
+
+export const getPreviewStatus = (id: string) =>
+  apiGet<PreviewStatus>(`/sessions/${id}/preview-status`)

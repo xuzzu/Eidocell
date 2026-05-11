@@ -30,8 +30,8 @@ function formatDate(iso: string) {
           <div class="min-w-0 flex-1">
             <h3 class="font-bold text-sm tracking-wider uppercase truncate">{{ session.name }}</h3>
             <div class="path-container mt-0.5">
-              <p class="path-text text-[10px] font-mono text-neutral/50" :title="session.images_directory">
-                {{ session.images_directory }}
+              <p class="path-text text-[10px] font-mono text-neutral/50" :title="session.images_directory ?? ''">
+                {{ session.images_directory ?? '— no source folder —' }}
               </p>
             </div>
           </div>

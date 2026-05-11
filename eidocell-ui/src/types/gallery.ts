@@ -7,6 +7,8 @@ export interface SampleOut {
   class_name: string | null
   class_color: string | null
   has_mask: boolean
+  mask_channels: number[]
+  n_channels: number
 }
 
 export interface SamplePage {
@@ -51,4 +53,12 @@ export interface ClassOut {
 export interface BulkClassAssignment {
   sample_ids: string[]
   class_id: string | null
+}
+
+export interface SortableAttribute {
+  name: string
+  channel_index: number
+  channel_name: string
+  /** sort_by token, e.g. "attr:area:ch:0" */
+  value: string
 }

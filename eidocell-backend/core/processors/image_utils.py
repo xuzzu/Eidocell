@@ -70,6 +70,82 @@ def generate_thumbnail(source: Path, dest: Path) -> None:
         img.save(dest, "JPEG", quality=85)
 
 
+def array_to_uint8(arr: np.ndarray) -> np.ndarray:
+    """Normalise any-dtype ndarray to uint8 for visualization.
+
+    Floats and signed ints (e.g. post-zscore) are min-max scaled. uint8
+    arrays pass through. Multi-channel (>3) arrays are reduced to channel 0
+    — multi-channel UI is out of scope.
+    """
+    if arr.ndim == 3 and arr.shape[2] not in (1, 3):
+        arr = arr[..., 0]
+    if arr.ndim == 3 and arr.shape[2] == 1:
+        arr = arr[..., 0]
+    if arr.dtype == np.uint8:
+        return arr
+    a = arr.astype(np.float32, copy=False)
+    mn, mx = float(a.min()), float(a.max())
+    if mx > mn:
+        scaled = (a - mn) / (mx - mn) * 255.0
+    else:
+        scaled = np.zeros_like(a)
+    return np.clip(scaled, 0, 255).astype(np.uint8)
+
+
+def render_array_to_thumbnail(arr: np.ndarray, dest: Path) -> None:
+    """Render a numpy ndarray to a thumbnail JPEG at ``dest``."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    u8 = array_to_uint8(arr)
+    img = Image.fromarray(u8)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    img.thumbnail(THUMBNAIL_SIZE)
+    img.save(dest, "JPEG", quality=85)
+
+
+def channel_to_uint8(arr: np.ndarray, channel: int) -> np.ndarray:
+    """Extract a single channel as a min-max normalised uint8 2-D array."""
+    if arr.ndim == 2:
+        if channel != 0:
+            raise IndexError(f"channel {channel} out of range (single-channel image)")
+        ch = arr
+    elif arr.ndim == 3:
+        n = arr.shape[2]
+        if channel < 0 or channel >= n:
+            raise IndexError(f"channel {channel} out of range (n_channels={n})")
+        ch = arr[..., channel]
+    else:
+        raise ValueError(f"unsupported ndim {arr.ndim}")
+    if ch.dtype == np.uint8:
+        return ch
+    a = ch.astype(np.float32, copy=False)
+    mn, mx = float(a.min()), float(a.max())
+    if mx > mn:
+        scaled = (a - mn) / (mx - mn) * 255.0
+    else:
+        scaled = np.zeros_like(a)
+    return np.clip(scaled, 0, 255).astype(np.uint8)
+
+
+def render_channel_to_thumbnail(arr: np.ndarray, channel: int, dest: Path) -> None:
+    """Render one channel of a multi-channel array to a thumbnail JPEG."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    u8 = channel_to_uint8(arr, channel)
+    img = Image.fromarray(u8, mode="L")
+    img.thumbnail(THUMBNAIL_SIZE)
+    img.save(dest, "JPEG", quality=85)
+
+
+def render_array_to_full(arr: np.ndarray, dest: Path) -> None:
+    """Render a numpy ndarray to a PNG at full resolution at ``dest``."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    u8 = array_to_uint8(arr)
+    img = Image.fromarray(u8)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    img.save(dest, "PNG")
+
+
 def generate_collage(image_paths: list[Path], dest: Path) -> None:
     """Generate a grid collage JPEG from a list of image paths."""
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Folder } from 'lucide-vue-next'
+import { Plus, Folder, X } from 'lucide-vue-next'
 import { useSessionStore } from '@/stores/session'
+import { getPreviewStatus } from '@/api/sessions'
+import type { PreviewStatus } from '@/types'
 import SessionCard from '@/components/sessions/SessionCard.vue'
 import CreateSessionDialog from '@/components/sessions/CreateSessionDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -16,29 +18,81 @@ const confirmDialog = ref<InstanceType<typeof ConfirmDialog>>()
 const deleteTargetId = ref<string | null>(null)
 const errorMessage = ref('')
 
+const openingSessionId = ref<string | null>(null)
+const openingStatus = ref<PreviewStatus | null>(null)
+let pollHandle: number | null = null
+
 onMounted(() => {
   sessionStore.fetchSessions()
 })
 
-async function onCreate(data: { name: string; images_directory: string }) {
+onUnmounted(() => {
+  stopPolling()
+})
+
+async function onCreate(data: { name: string }) {
   errorMessage.value = ''
   try {
     const session = await sessionStore.createSession(data)
-    await sessionStore.selectSession(session.id)
-    router.push('/workspace/gallery')
+    router.push({ name: 'import-wizard', params: { sessionId: session.id } })
   } catch (e: any) {
     errorMessage.value = e.message || 'Failed to create session'
   }
 }
 
+function stopPolling() {
+  if (pollHandle !== null) {
+    clearInterval(pollHandle)
+    pollHandle = null
+  }
+}
+
+async function actuallyOpen(id: string) {
+  await sessionStore.selectSession(id)
+  router.push('/workspace/gallery')
+}
+
 async function onSelect(id: string) {
   errorMessage.value = ''
   try {
-    await sessionStore.selectSession(id)
-    router.push('/workspace/gallery')
+    const status = await getPreviewStatus(id)
+    if (status.ready) {
+      await actuallyOpen(id)
+      return
+    }
+    // Block on previews. Show modal + poll.
+    openingSessionId.value = id
+    openingStatus.value = status
+    pollHandle = window.setInterval(async () => {
+      if (!openingSessionId.value) return
+      try {
+        const next = await getPreviewStatus(openingSessionId.value)
+        openingStatus.value = next
+        if (next.ready) {
+          stopPolling()
+          const sid = openingSessionId.value
+          openingSessionId.value = null
+          openingStatus.value = null
+          if (sid) await actuallyOpen(sid)
+        } else if (next.phase === 'failed') {
+          stopPolling()
+          errorMessage.value = next.message || 'Session is not ready'
+          openingSessionId.value = null
+          openingStatus.value = null
+        }
+      } catch {
+        // transient
+      }
+    }, 500) as unknown as number
   } catch (e: any) {
     errorMessage.value = e.message || 'Failed to open session'
   }
+}
+
+function cancelOpening() {
+  stopPolling()
+  openingSessionId.value = null
+  openingStatus.value = null
 }
 
 function onDeleteRequest(id: string) {
@@ -106,5 +160,36 @@ async function onDeleteConfirm() {
       :danger="true"
       @confirm="onDeleteConfirm"
     />
+
+    <!-- Preview-pregen blocking modal -->
+    <div
+      v-if="openingSessionId && openingStatus && !openingStatus.ready"
+      class="fixed inset-0 z-[700] bg-base-100/80 backdrop-blur-sm flex items-center justify-center"
+    >
+      <div class="w-full max-w-md bg-base-100 border border-base-300 rounded-[2px] shadow-xl p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-[12px] font-bold tracking-widest uppercase">Preparing session</h2>
+          <button
+            class="w-7 h-7 flex items-center justify-center rounded-[2px] hover:bg-base-200 transition-colors"
+            @click="cancelOpening"
+            title="Cancel"
+          ><X class="w-4 h-4" /></button>
+        </div>
+        <p class="text-[11px] font-mono text-neutral/70 tracking-tight">
+          {{ openingStatus.phase === 'importing'
+            ? 'Import still running.'
+            : openingStatus.phase === 'pregenerating'
+              ? 'Pre-generating per-channel previews.'
+              : openingStatus.phase === 'failed'
+                ? 'Session preparation failed.'
+                : 'Working...' }}
+        </p>
+        <progress
+          class="progress progress-neutral w-full rounded-[2px]"
+          :value="openingStatus.progress" max="100"
+        />
+        <p class="text-[10px] font-mono text-neutral/60 truncate">{{ openingStatus.message }}</p>
+      </div>
+    </div>
   </div>
 </template>

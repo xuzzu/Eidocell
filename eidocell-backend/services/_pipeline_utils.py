@@ -26,11 +26,13 @@ from core.processors.errors import (
     ProcessorError,
     ProcessorInputError,
 )
+from core.processors.image_utils import array_to_uint8, channel_to_uint8
 from core.processors.inference.feature_extraction import (
     FeatureExtractionProcessor,
     MorphologicalFeatureExtraction,
 )
 from core.storage import features as lance_features
+from core.storage import images as lance_images
 from core.storage import mask_attrs as lance_mask_attrs
 from core.task_manager import TaskCancelledException
 from core.utils import get_active_samples
@@ -68,12 +70,14 @@ def preload_morphological_masks(
     session_id: str,
     sample_data: list[dict],
     processor: FeatureExtractionProcessor,
+    *,
+    channel_index: int = 0,
 ) -> dict[str, dict]:
     """If `processor` is morphological, eagerly load attrs from Lance keyed by sample id."""
     if not isinstance(processor, MorphologicalFeatureExtraction):
         return {}
     sample_ids = [s["id"] for s in sample_data]
-    bulk = lance_mask_attrs.get_attrs_bulk(session_id, sample_ids)
+    bulk = lance_mask_attrs.get_attrs_bulk(session_id, sample_ids, channel_index=channel_index)
     return {sid: attrs for sid, attrs in bulk.items() if attrs}
 
 
@@ -104,6 +108,7 @@ def extract_features_to_lance(
     on_progress: Callable[[int, int, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     flush_every: int = DEFAULT_FLUSH_EVERY,
+    channel_index: int = 0,
 ) -> tuple[int, int]:
     """Extract features for all samples and stream them into LanceDB.
 
@@ -135,9 +140,25 @@ def extract_features_to_lance(
                 if is_morphological:
                     features = processor.extract_from_attributes(masks.get(sd["id"]))
                 else:
-                    image, _ = read_image(sd["path"])
+                    # Prefer the per-session Lance images table; fall back to
+                    # disk path for legacy sessions imported before the
+                    # storage migration.
+                    image = lance_images.read_array(session_id, sd["id"])
+                    if image is None and sd.get("path"):
+                        image, _ = read_image(sd["path"])
                     if image is None:
-                        raise ProcessorInputError(f"failed to read image {sd['path']}")
+                        raise ProcessorInputError(f"no image bytes for sample {sd['id']}")
+                    # Deep extractors operate on a single configurable channel and
+                    # downstream cv2 ops reject CV_32S/CV_64F — normalise to uint8
+                    # at the boundary. The processor's preprocessor then handles
+                    # the gray→RGB lift.
+                    if image.ndim == 3 and image.shape[2] > 1:
+                        ch = max(0, min(int(channel_index), image.shape[2] - 1))
+                        image = channel_to_uint8(image, ch)
+                    elif image.ndim == 3 and image.shape[2] == 1:
+                        image = array_to_uint8(image.squeeze(-1))
+                    else:
+                        image = array_to_uint8(image)
                     features = processor.extract(image)
             except ProcessorError as e:
                 logger.warning("sample %s skipped: %s", sd["id"], e)

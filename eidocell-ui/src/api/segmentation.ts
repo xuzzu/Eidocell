@@ -10,10 +10,19 @@ export const runSegmentation = (sid: string, data: RunSegmentationRequest) =>
 export const runSegmentationAsync = (sid: string, data: RunSegmentationRequest) =>
   apiPost<{ task_id: string }>(`/sessions/${sid}/segmentation/run-async`, data)
 
-export const getMaskAttributes = (sid: string, sampleId: string) =>
-  apiGet<Record<string, number>>(`/sessions/${sid}/samples/${sampleId}/mask/attributes`)
+export const getMaskAttributes = (sid: string, sampleId: string, channel = 0) =>
+  apiGet<Record<string, number>>(
+    `/sessions/${sid}/samples/${sampleId}/mask/attributes?channel=${channel}`,
+  )
 
-export const maskOverlayUrl = (sid: string, sampleId: string, version?: number) => {
-  const base = imageUrl(`/sessions/${sid}/samples/${sampleId}/mask/overlay`)
-  return version ? `${base}?v=${version}` : base
+export const maskOverlayUrl = (
+  sid: string,
+  sampleId: string,
+  version?: number,
+  channel = 0,
+) => {
+  const params = new URLSearchParams()
+  params.set('channel', String(channel))
+  if (version) params.set('v', String(version))
+  return imageUrl(`/sessions/${sid}/samples/${sampleId}/mask/overlay?${params}`)
 }

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ArrowUp, ArrowDown, Search, SearchCheck, EyeOff, Eye } from 'lucide-vue-next'
+import { computed, ref } from 'vue'
+import { ArrowUp, ArrowDown, Search, SearchCheck, EyeOff, Eye, Columns3, Image as ImageIcon } from 'lucide-vue-next'
 import { useGalleryStore } from '@/stores/gallery'
+import ChannelsWizardPopover from './ChannelsWizardPopover.vue'
 
 const gallery = useGalleryStore()
 
@@ -23,6 +25,22 @@ function setSortOrder(order: 'asc' | 'desc') {
 function onSortChange(event: Event) {
   gallery.setSort((event.target as HTMLSelectElement).value, gallery.sortOrder)
 }
+
+const channelsPopover = ref<{ x: number; y: number } | null>(null)
+
+function openChannelsPopover(event: MouseEvent) {
+  if (channelsPopover.value) {
+    channelsPopover.value = null
+    return
+  }
+  const btn = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  // Anchor under the button, right-aligned.
+  channelsPopover.value = { x: btn.right - 240, y: btn.bottom + 4 }
+}
+
+const channelsButtonActive = computed(() =>
+  gallery.channelDisplayMode === 'multi' && gallery.selectedChannels.length > 1
+)
 </script>
 
 <template>
@@ -34,7 +52,7 @@ function onSortChange(event: Event) {
       min="1"
       max="5"
       step="1"
-      :value="props.zoomLevel"
+      :value="6 - props.zoomLevel"
       class="range range-xs range-neutral w-50 shrink-0 transition-none"
       @input="emit('update:zoomLevel', 6 - Number(($event.target as HTMLInputElement).value))"
     />
@@ -61,19 +79,21 @@ function onSortChange(event: Event) {
 
     <!-- Sort-by dropdown -->
     <select
-      class="select select-bordered select-sm rounded-[2px] outline-none focus:ring-1 focus:ring-neutral text-xs font-mono w-40 shrink-0"
+      class="select select-bordered select-sm rounded-[2px] outline-none focus:ring-1 focus:ring-neutral text-xs font-mono w-56 shrink-0"
       :value="gallery.sortBy"
       @change="onSortChange"
     >
       <option value="filename">Filename</option>
-      <optgroup v-if="gallery.sortableAttributes.length > 0" label="Attributes">
+      <optgroup
+        v-for="(attrs, ch) in gallery.sortableAttributesByChannel"
+        :key="ch"
+        :label="attrs[0]?.channel_name ?? `Channel ${Number(ch) + 1}`"
+      >
         <option
-          v-for="attr in gallery.sortableAttributes"
-          :key="attr"
-          :value="'attr:' + attr"
-        >
-          {{ attr }}
-        </option>
+          v-for="attr in attrs"
+          :key="attr.value"
+          :value="attr.value"
+        >{{ attr.name }}</option>
       </optgroup>
     </select>
 
@@ -98,5 +118,22 @@ function onSortChange(event: Event) {
       <component :is="props.maskView ? Eye : EyeOff" class="w-4 h-4" />
       MASK VIEW
     </button>
+
+    <!-- CHANNELS wizard popover trigger -->
+    <button
+      class="h-8 px-4 flex items-center gap-2 rounded-[2px] bg-neutral text-neutral-content text-[11px] font-bold tracking-widest uppercase transition-opacity duration-200"
+      :class="channelsButtonActive ? 'opacity-100' : 'opacity-50 hover:opacity-80'"
+      @click="openChannelsPopover"
+    >
+      <component :is="channelsButtonActive ? Columns3 : ImageIcon" class="w-4 h-4" />
+      CHANNELS
+    </button>
+
+    <ChannelsWizardPopover
+      v-if="channelsPopover"
+      :x="channelsPopover.x"
+      :y="channelsPopover.y"
+      @close="channelsPopover = null"
+    />
   </div>
 </template>

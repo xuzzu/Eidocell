@@ -16,6 +16,7 @@ export interface SegmentationMethod {
 export interface RunSegmentationRequest {
   method: string
   params?: Record<string, number>
+  channel_index?: number
 }
 
 export interface SegmentationResult {

@@ -2,6 +2,7 @@ import { apiGet, apiPost, apiPatch, apiDelete, imageUrl } from './client'
 import type {
   SampleOut, SamplePage, SampleListParams,
   ClassOut, ClassCreate, ClassUpdate, BulkClassAssignment,
+  SortableAttribute,
 } from '@/types'
 
 export const listSamples = (sid: string, params: SampleListParams) =>
@@ -10,11 +11,18 @@ export const listSamples = (sid: string, params: SampleListParams) =>
 export const getSample = (sid: string, sampleId: string) =>
   apiGet<SampleOut>(`/sessions/${sid}/samples/${sampleId}`)
 
-export const sampleImageUrl = (sid: string, sampleId: string) =>
-  imageUrl(`/sessions/${sid}/samples/${sampleId}/image`)
+export const sampleImageUrl = (sid: string, sampleId: string, channel?: number) =>
+  imageUrl(
+    typeof channel === 'number'
+      ? `/sessions/${sid}/samples/${sampleId}/image?channel=${channel}`
+      : `/sessions/${sid}/samples/${sampleId}/image`,
+  )
 
 export const sampleThumbnailUrl = (sid: string, sampleId: string) =>
   imageUrl(`/sessions/${sid}/samples/${sampleId}/thumbnail`)
+
+export const sampleChannelThumbnailUrl = (sid: string, sampleId: string, channel: number) =>
+  imageUrl(`/sessions/${sid}/samples/${sampleId}/channel/${channel}/thumbnail`)
 
 export const listClasses = (sid: string) =>
   apiGet<ClassOut[]>(`/sessions/${sid}/classes`)
@@ -32,4 +40,4 @@ export const assignSamplesToClass = (sid: string, data: BulkClassAssignment) =>
   apiPost<{ updated: number }>(`/sessions/${sid}/samples/assign-class`, data)
 
 export const listSortableAttributes = (sid: string) =>
-  apiGet<string[]>(`/sessions/${sid}/sortable-attributes`)
+  apiGet<SortableAttribute[]>(`/sessions/${sid}/sortable-attributes`)

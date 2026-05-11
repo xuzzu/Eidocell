@@ -2,8 +2,8 @@
 
 This is the columnar replacement for the old ``Mask.attributes`` JSON blob.
 All scalar mask attributes computed by ``compute_mask_attributes`` live here as
-typed columns, keyed by ``(sample_id, channel_set)``. Schema evolution (adding
-new columns) is supported by Lance natively.
+typed columns, keyed by ``(sample_id, channel_index)``. Schema evolution
+(adding new columns) is supported by Lance natively.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from core.storage import lance as lance_store
 
 logger = logging.getLogger("eidocell.storage.mask_attrs")
 
-DEFAULT_CHANNEL_SET = "default"
+DEFAULT_CHANNEL_INDEX = 0
 
 # Source of truth for which scalar attributes the Lance table stores. Order is
 # the canonical CSV/export ordering. Every attr is stored as float32 — integer-
@@ -44,14 +44,14 @@ ATTRIBUTE_NAMES: list[str] = [
     "hu1", "hu2", "hu3", "hu4", "hu5", "hu6", "hu7",
 ]
 
-_KEY_FIELDS = ["sample_id", "channel_set"]
+_KEY_FIELDS = ["sample_id", "channel_index"]
 _META_FIELDS = ["created_at"]
 
 
 def attrs_schema() -> pa.Schema:
     fields = [
         pa.field("sample_id", pa.string()),
-        pa.field("channel_set", pa.string()),
+        pa.field("channel_index", pa.int32()),
     ]
     for name in ATTRIBUTE_NAMES:
         fields.append(pa.field(name, pa.float32()))
@@ -78,7 +78,7 @@ def upsert_attrs(
     session_id: str,
     rows: list[dict],
 ) -> int:
-    """Upsert (sample_id, channel_set) rows. Missing attrs become null."""
+    """Upsert (sample_id, channel_index) rows. Missing attrs become null."""
     if not rows:
         return 0
 
@@ -86,8 +86,8 @@ def upsert_attrs(
     payload = []
     for r in rows:
         sid = r["sample_id"]
-        cs = r.get("channel_set", DEFAULT_CHANNEL_SET)
-        record = {"sample_id": sid, "channel_set": cs}
+        ci = int(r.get("channel_index", DEFAULT_CHANNEL_INDEX))
+        record = {"sample_id": sid, "channel_index": ci}
         for name in ATTRIBUTE_NAMES:
             record[name] = _coerce_value(r.get(name))
         record["created_at"] = now
@@ -120,22 +120,29 @@ def delete_for_samples(session_id: str, sample_ids: Iterable[str]) -> int:
     return len(sample_ids)
 
 
+def delete_for_sample_channel(session_id: str, sample_id: str, channel_index: int) -> int:
+    """Delete the row for a specific (sample_id, channel_index) pair."""
+    try:
+        table = lance_store.mask_attrs_table(session_id, create_if_missing=False)
+    except FileNotFoundError:
+        return 0
+    where = f"sample_id = '{sample_id}' AND channel_index = {int(channel_index)}"
+    table.delete(where)
+    return 1
+
+
 def get_attrs(
     session_id: str,
     sample_id: str,
     *,
-    channel_set: str = DEFAULT_CHANNEL_SET,
+    channel_index: int = DEFAULT_CHANNEL_INDEX,
 ) -> dict | None:
-    """Return the attribute dict for one sample, or None if absent.
-
-    Null/NaN values are dropped from the returned dict so it matches the old
-    ``Mask.attributes or {}`` semantics.
-    """
+    """Return the attribute dict for one (sample, channel), or None if absent."""
     try:
         table = lance_store.mask_attrs_table(session_id, create_if_missing=False)
     except FileNotFoundError:
         return None
-    where = f"sample_id = '{sample_id}' AND channel_set = '{channel_set}'"
+    where = f"sample_id = '{sample_id}' AND channel_index = {int(channel_index)}"
     arrow = table.search().where(where).limit(1).to_arrow()
     if arrow.num_rows == 0:
         return None
@@ -154,9 +161,9 @@ def get_attrs_bulk(
     session_id: str,
     sample_ids: Iterable[str],
     *,
-    channel_set: str = DEFAULT_CHANNEL_SET,
+    channel_index: int = DEFAULT_CHANNEL_INDEX,
 ) -> dict[str, dict]:
-    """Fetch attribute dicts for many samples, keyed by sample_id."""
+    """Fetch attribute dicts for many samples on one channel, keyed by sample_id."""
     sample_ids = list(sample_ids)
     if not sample_ids:
         return {}
@@ -165,7 +172,7 @@ def get_attrs_bulk(
     except FileNotFoundError:
         return {}
     ids_literal = ",".join(f"'{sid}'" for sid in sample_ids)
-    where = f"channel_set = '{channel_set}' AND sample_id IN ({ids_literal})"
+    where = f"channel_index = {int(channel_index)} AND sample_id IN ({ids_literal})"
     arrow = table.search().where(where).to_arrow()
     if arrow.num_rows == 0:
         return {}
@@ -190,18 +197,43 @@ def get_attrs_bulk(
 def has_sample_ids(
     session_id: str,
     *,
-    channel_set: str = DEFAULT_CHANNEL_SET,
+    channel_index: int = DEFAULT_CHANNEL_INDEX,
 ) -> set[str]:
-    """Return the set of sample_ids that already have an attrs row."""
+    """Return the set of sample_ids that already have an attrs row for the channel."""
     try:
         table = lance_store.mask_attrs_table(session_id, create_if_missing=False)
     except FileNotFoundError:
         return set()
-    where = f"channel_set = '{channel_set}'"
+    where = f"channel_index = {int(channel_index)}"
     arrow = table.search().where(where).select(["sample_id"]).to_arrow()
     if arrow.num_rows == 0:
         return set()
     return set(arrow.column("sample_id").to_pylist())
+
+
+def channels_with_attrs_bulk(
+    session_id: str,
+    sample_ids: Iterable[str],
+) -> dict[str, list[int]]:
+    """Return {sample_id: sorted list of channel_index values with mask attrs}."""
+    sample_ids = list(sample_ids)
+    if not sample_ids:
+        return {}
+    try:
+        table = lance_store.mask_attrs_table(session_id, create_if_missing=False)
+    except FileNotFoundError:
+        return {}
+    ids_literal = ",".join(f"'{sid}'" for sid in sample_ids)
+    where = f"sample_id IN ({ids_literal})"
+    arrow = table.search().where(where).select(["sample_id", "channel_index"]).to_arrow()
+    if arrow.num_rows == 0:
+        return {}
+    out: dict[str, set[int]] = {}
+    sids = arrow.column("sample_id").to_pylist()
+    chans = arrow.column("channel_index").to_pylist()
+    for sid, ci in zip(sids, chans):
+        out.setdefault(sid, set()).add(int(ci))
+    return {sid: sorted(s) for sid, s in out.items()}
 
 
 def query_predicate(
@@ -209,7 +241,7 @@ def query_predicate(
     where: str,
     *,
     sample_ids: Iterable[str] | None = None,
-    channel_set: str = DEFAULT_CHANNEL_SET,
+    channel_index: int = DEFAULT_CHANNEL_INDEX,
 ) -> list[str]:
     """Return sample_ids matching a Lance SQL predicate over attribute columns.
 
@@ -221,7 +253,7 @@ def query_predicate(
         table = lance_store.mask_attrs_table(session_id, create_if_missing=False)
     except FileNotFoundError:
         return []
-    clauses = [f"channel_set = '{channel_set}'"]
+    clauses = [f"channel_index = {int(channel_index)}"]
     if where:
         clauses.append(f"({where})")
     if sample_ids is not None:
@@ -242,7 +274,7 @@ def fetch_columns(
     columns: list[str],
     *,
     sample_ids: Iterable[str] | None = None,
-    channel_set: str = DEFAULT_CHANNEL_SET,
+    channel_index: int = DEFAULT_CHANNEL_INDEX,
 ) -> tuple[list[str], dict[str, np.ndarray]]:
     """Return aligned (sample_ids, {col: np.ndarray}) for the given columns.
 
@@ -257,7 +289,7 @@ def fetch_columns(
     except FileNotFoundError:
         return [], {c: np.zeros(0) for c in columns}
 
-    clauses = [f"channel_set = '{channel_set}'"]
+    clauses = [f"channel_index = {int(channel_index)}"]
     null_filter = " AND ".join(f"{c} IS NOT NULL" for c in columns)
     if null_filter:
         clauses.append(null_filter)

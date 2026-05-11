@@ -159,10 +159,11 @@ def _export_binary_masks(session: Session, samples: list[Sample], out_dir: Path)
 
     exported = 0
     for s in samples:
-        src = mask_files.mask_path(session.session_folder, s.id)
-        if src.is_file():
-            shutil.copy2(src, binary_dir / f"{s.id}.png")
-            exported += 1
+        for ch in mask_files.list_mask_channels(session.session_folder, s.id):
+            src = mask_files.mask_path(session.session_folder, s.id, ch)
+            if src.is_file():
+                shutil.copy2(src, binary_dir / f"{s.id}_ch{ch}.png")
+                exported += 1
     return exported
 
 

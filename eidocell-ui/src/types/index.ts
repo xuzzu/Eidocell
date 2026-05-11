@@ -1,4 +1,5 @@
 export * from './sessions'
+export * from './imports'
 export * from './gallery'
 export * from './segmentation'
 export * from './classes'

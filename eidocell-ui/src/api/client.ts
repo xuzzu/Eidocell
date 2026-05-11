@@ -39,12 +39,9 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return handleResponse<T>(res)
 }
 
-export async function apiDelete(path: string): Promise<void> {
+export async function apiDelete<T = void>(path: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, { method: 'DELETE' })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new ApiError(res.status, body.detail || res.statusText)
-  }
+  return handleResponse<T>(res)
 }
 
 export function imageUrl(path: string): string {

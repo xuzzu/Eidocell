@@ -58,7 +58,7 @@ def list_class_samples(
             "class_id": s.class_id,
             "class_name": cls.name,
             "class_color": cls.color,
-            "has_mask": s.mask is not None,
+            "has_mask": len(s.masks) > 0,
         })
     return items, total
 
@@ -171,6 +171,18 @@ def get_or_generate_collage(db: DbSession, class_id: str) -> Path:
         .limit(MAX_COLLAGE_SAMPLES)
         .all()
     )
-    image_paths = [Path(s.path) for s in samples]
+    # Prefer pre-generated per-channel JPGs (channel 0 = first/brightfield by
+    # convention). Fall back to the combined thumbnail, then to the raw source.
+    thumb_dir = Path(session.session_folder) / "previews" / "thumbnails"
+    image_paths: list[Path] = []
+    for s in samples:
+        ch0 = thumb_dir / f"{s.id}_ch0.jpg"
+        combined = thumb_dir / f"{s.id}.jpg"
+        if ch0.is_file():
+            image_paths.append(ch0)
+        elif combined.is_file():
+            image_paths.append(combined)
+        elif s.path:
+            image_paths.append(Path(s.path))
     generate_collage(image_paths, collage_path)
     return collage_path

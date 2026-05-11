@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Boolean, Integer, Float, ForeignKey, Table, Column, DateTime, JSON
+from sqlalchemy import String, Boolean, Integer, Float, ForeignKey, Table, Column, DateTime, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.session import Base
@@ -25,7 +25,7 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    images_directory: Mapped[str] = mapped_column(String, nullable=False)
+    images_directory: Mapped[str | None] = mapped_column(String, nullable=True)
     session_folder: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
@@ -35,6 +35,8 @@ class Session(Base):
     )
     scale_factor: Mapped[float] = mapped_column(Float, default=1.0)
     scale_units: Mapped[str] = mapped_column(String, default="px")
+    channel_count: Mapped[int] = mapped_column(Integer, default=1)
+    channel_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
     selected_gate_id: Mapped[str | None] = mapped_column(
         ForeignKey("gates.id", ondelete="SET NULL"), nullable=True
     )
@@ -72,16 +74,19 @@ class Sample(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(String, nullable=False)
-    path: Mapped[str] = mapped_column(String, nullable=False)
+    # Primary raw source path (debugging/re-import). May be empty for samples
+    # produced from container formats (CIF/RIF) where bytes live in Lance only.
+    path: Mapped[str] = mapped_column(String, nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     class_id: Mapped[str | None] = mapped_column(ForeignKey("classes.id"), nullable=True, index=True)
-    # Forward hook for multi-channel data: e.g. {"order": ["DAPI", "GFP"], "shape": [H, W, 2]}.
+    # Per-sample multi-channel + import metadata. Shape:
+    #   {"order": ["BF","DAPI"], "shape": [H,W,C], "raw_paths": [...], "import_id": "..."}
     channels: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     session: Mapped["Session"] = relationship(back_populates="samples")
     sample_class: Mapped["SampleClass | None"] = relationship(back_populates="samples")
-    mask: Mapped["Mask | None"] = relationship(
-        back_populates="sample", uselist=False, cascade="all, delete-orphan"
+    masks: Mapped[list["Mask"]] = relationship(
+        back_populates="sample", cascade="all, delete-orphan"
     )
     clusters: Mapped[list["Cluster"]] = relationship(
         secondary=sample_clusters, back_populates="samples"
@@ -105,17 +110,19 @@ class Cluster(Base):
 
 class Mask(Base):
     __tablename__ = "masks"
+    __table_args__ = (UniqueConstraint("sample_id", "channel_index", name="uq_masks_sample_channel"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     sample_id: Mapped[str] = mapped_column(
-        ForeignKey("samples.id"), nullable=False, unique=True, index=True
+        ForeignKey("samples.id"), nullable=False, index=True
     )
+    channel_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     segmentation_method: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
-    sample: Mapped["Sample"] = relationship(back_populates="mask")
+    sample: Mapped["Sample"] = relationship(back_populates="masks")
 
 
 class Plot(Base):
@@ -188,3 +195,27 @@ class Gate(Base):
     parent_gate: Mapped["Gate | None"] = relationship(
         remote_side="Gate.id", foreign_keys=[parent_gate_id]
     )
+
+
+class Import(Base):
+    __tablename__ = "imports"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    source_kind: Mapped[str] = mapped_column(String, nullable=False)  # "folder" | "cif" | "rif" | "hdf5"
+    source_path: Mapped[str] = mapped_column(String, nullable=False)
+    csv_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    csv_filename_col: Mapped[str | None] = mapped_column(String, nullable=True)
+    channel_grouping: Mapped[bool] = mapped_column(Boolean, default=True)
+    preprocessing_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending|loading|preprocessing|completed|failed|cancelled
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    previews_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{"path", "reason"}]
+
+    session: Mapped["Session"] = relationship()

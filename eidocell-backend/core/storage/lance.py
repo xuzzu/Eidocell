@@ -21,6 +21,9 @@ logger = logging.getLogger("eidocell.storage.lance")
 
 FEATURES_PREFIX = "features_"
 MASK_ATTRS_PREFIX = "mask_attrs_"
+IMAGES_PREFIX = "images_"
+SAMPLE_ATTRS_PREFIX = "sample_attrs_"
+IMPORT_STAGING_PREFIX = "import_staging_"
 
 
 @lru_cache(maxsize=1)
@@ -36,6 +39,18 @@ def features_table_name(session_id: str) -> str:
 
 def mask_attrs_table_name(session_id: str) -> str:
     return f"{MASK_ATTRS_PREFIX}{session_id}"
+
+
+def images_table_name(session_id: str) -> str:
+    return f"{IMAGES_PREFIX}{session_id}"
+
+
+def sample_attrs_table_name(session_id: str) -> str:
+    return f"{SAMPLE_ATTRS_PREFIX}{session_id}"
+
+
+def import_staging_table_name(session_id: str, import_id: str) -> str:
+    return f"{IMPORT_STAGING_PREFIX}{session_id}_{import_id}"
 
 
 def features_schema(dim: int) -> pa.Schema:
@@ -80,6 +95,36 @@ def features_table(
         return db.open_table(name)
 
 
+def open_or_create_table(
+    name: str,
+    schema: pa.Schema,
+    *,
+    create_if_missing: bool = True,
+):
+    """Generic opener used by per-session image / sample_attrs / staging tables."""
+    db = connect()
+    try:
+        return db.open_table(name)
+    except (FileNotFoundError, ValueError):
+        pass
+    if not create_if_missing:
+        raise FileNotFoundError(f"Lance table '{name}' does not exist")
+    try:
+        return db.create_table(name, schema=schema)
+    except (ValueError, OSError):
+        return db.open_table(name)
+
+
+def drop_table(name: str) -> None:
+    db = connect()
+    try:
+        db.drop_table(name)
+    except (FileNotFoundError, ValueError):
+        return
+    except Exception:
+        logger.exception("failed to drop lance table %s", name)
+
+
 def mask_attrs_table(
     session_id: str,
     *,
@@ -107,15 +152,37 @@ def mask_attrs_table(
 
 
 def drop_session_tables(session_id: str) -> None:
-    """Best-effort drop of every Lance table belonging to a session."""
+    """Best-effort drop of every Lance table belonging to a session.
+
+    Includes any leftover import_staging_{sid}_* tables (from cancelled or
+    crashed imports).
+    """
     db = connect()
-    for name in (features_table_name(session_id), mask_attrs_table_name(session_id)):
+    fixed = (
+        features_table_name(session_id),
+        mask_attrs_table_name(session_id),
+        images_table_name(session_id),
+        sample_attrs_table_name(session_id),
+    )
+    for name in fixed:
         try:
             db.drop_table(name)
         except (FileNotFoundError, ValueError):
             continue
         except Exception:
             logger.exception("failed to drop lance table %s", name)
+    # Sweep any staging tables for this session.
+    staging_prefix = f"{IMPORT_STAGING_PREFIX}{session_id}_"
+    try:
+        names = list(db.table_names())
+    except Exception:
+        names = []
+    for name in names:
+        if name.startswith(staging_prefix):
+            try:
+                db.drop_table(name)
+            except Exception:
+                logger.exception("failed to drop staging table %s", name)
 
 
 def with_retry(fn, *, attempts: int = 3, backoff: float = 0.05):
