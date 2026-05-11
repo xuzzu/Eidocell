@@ -1,7 +1,10 @@
 export type SourceKind = 'folder' | 'cif' | 'rif'
-export type TargetShapeStrategy = 'none' | 'min' | 'max' | 'mean' | 'explicit'
+export type TargetShapeStrategy =
+  | 'none' | 'min' | 'max' | 'mean' | 'explicit' | 'per_image_square'
 export type NormalizeStrategy = 'none' | 'minmax' | 'zscore'
 export type PaddingMethod = 'constant' | 'poisson' | 'replicate'
+export type PostResizeStrategy =
+  | 'none' | 'explicit' | 'min_longest' | 'max_longest' | 'mean_longest'
 
 export type ImportStatus =
   | 'pending'
@@ -22,6 +25,8 @@ export interface PreprocessingConfig {
   align_reference_index: number
   align_upsample_factor: number
   compensation_matrix?: number[][] | null
+  post_resize_strategy: PostResizeStrategy
+  post_resize_value: number | null
 }
 
 export interface ImportCreate {
@@ -75,4 +80,6 @@ export const DEFAULT_PREPROCESSING: PreprocessingConfig = {
   align_reference_index: 0,
   align_upsample_factor: 10,
   compensation_matrix: null,
+  post_resize_strategy: 'none',
+  post_resize_value: null,
 }
