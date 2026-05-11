@@ -174,9 +174,13 @@ def shape_summary(session_id: str, import_id: str) -> dict:
     heights = np.asarray(arrow.column("height").to_pylist(), dtype=np.int32)
     widths = np.asarray(arrow.column("width").to_pylist(), dtype=np.int32)
     chans = np.asarray(arrow.column("n_channels").to_pylist(), dtype=np.int32)
+    longest = np.maximum(heights, widths)
     return {
         "count": int(arrow.num_rows),
         "min_h": int(heights.min()), "max_h": int(heights.max()), "mean_h": int(round(heights.mean())),
         "min_w": int(widths.min()),  "max_w": int(widths.max()),  "mean_w": int(round(widths.mean())),
+        "min_longest":  int(longest.min()),
+        "max_longest":  int(longest.max()),
+        "mean_longest": int(round(longest.mean())),
         "n_channels": int(chans.max()),
     }

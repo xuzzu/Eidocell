@@ -65,6 +65,11 @@ def test_round_trip_multi_channel_and_summary():
     assert s["count"] == 2
     assert s["min_h"] == 20 and s["max_h"] == 40 and s["mean_h"] == 30
     assert s["min_w"] == 30 and s["max_w"] == 50 and s["mean_w"] == 40
+    # Longest-side stats: per-image max(H, W).
+    # arr_small is 20×30 → longest=30; arr_big is 40×50 → longest=50.
+    assert s["min_longest"] == 30
+    assert s["max_longest"] == 50
+    assert s["mean_longest"] == 40
     assert s["n_channels"] == 2
 
     import_staging.drop(sid, iid)
