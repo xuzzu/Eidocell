@@ -32,13 +32,13 @@ def schema() -> pa.Schema:
         pa.field("width", pa.int32()),
         pa.field("n_channels", pa.int32()),
         pa.field("dtype", pa.string()),
-        pa.field("raw_data", pa.list_(pa.uint8())),
+        pa.field("raw_data", pa.binary()),
         pa.field("parsed_attrs", pa.string()),  # JSON: {col: number} (may be "")
         # Optional pre-existing binary mask (e.g. IDEAS CIF 30818 IFDs).
         # Stored as raw uint8 0/1 bytes of shape (mask_h, mask_w); empty when absent.
         pa.field("mask_h", pa.int32()),
         pa.field("mask_w", pa.int32()),
-        pa.field("mask_data", pa.list_(pa.uint8())),
+        pa.field("mask_data", pa.binary()),
     ])
 
 
@@ -128,7 +128,7 @@ def iter_rows(session_id: str, import_id: str, *, batch_size: int = 64) -> Itera
             w = slice_.column("width")[i].as_py()
             c = slice_.column("n_channels")[i].as_py()
             dtype = slice_.column("dtype")[i].as_py()
-            data = bytes(slice_.column("raw_data")[i].as_py())
+            data = slice_.column("raw_data")[i].as_py()
             arr = np.frombuffer(data, dtype=dtype).copy()
             arr = arr.reshape((h, w)) if c == 1 else arr.reshape((h, w, c))
             channel_meta_s = slice_.column("channel_meta")[i].as_py() or "{}"
@@ -137,7 +137,7 @@ def iter_rows(session_id: str, import_id: str, *, batch_size: int = 64) -> Itera
             mh = slice_.column("mask_h")[i].as_py()
             mw = slice_.column("mask_w")[i].as_py()
             if mh and mw:
-                mdata = bytes(slice_.column("mask_data")[i].as_py())
+                mdata = slice_.column("mask_data")[i].as_py()
                 mask = np.frombuffer(mdata, dtype=np.uint8).copy().reshape((mh, mw))
             yield {
                 "tmp_id": slice_.column("tmp_id")[i].as_py(),

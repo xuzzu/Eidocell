@@ -135,6 +135,7 @@ def test_build_pipeline_with_explicit_pad_and_zscore():
 
 
 def test_build_pipeline_mean_strategy_uses_summary():
+    """mean strategy uses the average of mean_h and mean_w as the square side."""
     summary = {"count": 3, "min_h": 8, "max_h": 24, "mean_h": 16,
                "min_w": 10, "max_w": 26, "mean_w": 18, "n_channels": 1}
     p = build_pipeline(
@@ -143,4 +144,73 @@ def test_build_pipeline_mean_strategy_uses_summary():
     )
     img = np.zeros((10, 12), dtype=np.uint8)
     out, _ = p.apply(img)
-    assert out.shape == (16, 18)
+    # (mean_h + mean_w) / 2 = (16 + 18) / 2 = 17 → square (17, 17)
+    assert out.shape == (17, 17)
+
+
+def test_resolve_target_shape_min_is_square():
+    """min strategy takes the minimum across both axes — square output."""
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 3, "min_h": 8, "max_h": 24, "mean_h": 16,
+               "min_w": 10, "max_w": 26, "mean_w": 18, "n_channels": 1}
+    assert _resolve_target_shape("min", None, summary) == (8, 8)
+
+
+def test_resolve_target_shape_max_is_square():
+    """max strategy takes the maximum across both axes — square output."""
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 3, "min_h": 8, "max_h": 24, "mean_h": 16,
+               "min_w": 10, "max_w": 26, "mean_w": 18, "n_channels": 1}
+    assert _resolve_target_shape("max", None, summary) == (26, 26)
+
+
+def test_resolve_target_shape_mean_is_square():
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 3, "min_h": 8, "max_h": 24, "mean_h": 16,
+               "min_w": 10, "max_w": 26, "mean_w": 18, "n_channels": 1}
+    assert _resolve_target_shape("mean", None, summary) == (17, 17)
+
+
+def test_resolve_target_shape_explicit_passes_through_non_square():
+    """Explicit shapes are honoured as-is (caller chose the aspect)."""
+    from core.preprocessing.pipeline import _resolve_target_shape
+    out = _resolve_target_shape("explicit", (64, 128), summary=None)
+    assert out == (64, 128)
+
+
+def test_resolve_target_shape_none_summary_returns_none():
+    from core.preprocessing.pipeline import _resolve_target_shape
+    assert _resolve_target_shape("mean", None, None) is None
+
+
+def test_resolve_target_shape_already_square_summary():
+    """When height stats equal width stats, the square output matches them."""
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 5, "min_h": 32, "max_h": 64, "mean_h": 48,
+               "min_w": 32, "max_w": 64, "mean_w": 48, "n_channels": 1}
+    assert _resolve_target_shape("min", None, summary) == (32, 32)
+    assert _resolve_target_shape("max", None, summary) == (64, 64)
+    assert _resolve_target_shape("mean", None, summary) == (48, 48)
+
+
+def test_resolve_target_shape_mean_rounds_half_to_nearest():
+    """Mean of an odd sum is rounded to the nearest integer."""
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 2, "min_h": 10, "max_h": 11, "mean_h": 10,
+               "min_w": 11, "max_w": 11, "mean_w": 11, "n_channels": 1}
+    # (10 + 11) / 2 = 10.5 → 10 (banker's rounding in Python's round())
+    assert _resolve_target_shape("mean", None, summary) == (10, 10)
+
+
+def test_resolve_target_shape_unknown_raises():
+    from core.preprocessing.pipeline import _resolve_target_shape
+    summary = {"count": 1, "min_h": 10, "max_h": 10, "mean_h": 10,
+               "min_w": 10, "max_w": 10, "mean_w": 10, "n_channels": 1}
+    with pytest.raises(ValueError):
+        _resolve_target_shape("bogus", None, summary)
+
+
+def test_resolve_target_shape_explicit_requires_value():
+    from core.preprocessing.pipeline import _resolve_target_shape
+    with pytest.raises(ValueError):
+        _resolve_target_shape("explicit", None, summary=None)

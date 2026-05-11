@@ -6,9 +6,9 @@ shape can be stored without per-file disk artifacts. Reading reconstructs the
 ndarray via ``np.frombuffer(data, dtype).reshape((h, w, c))`` with the channel
 axis dropped if ``n_channels == 1`` and the source ndarray was 2-D.
 
-Variable-length ``list<uint8>`` is intentional — we store both raw (variable
-shape) and preprocessed (uniform shape) arrays in the same table, keyed by
-``(sample_id, channel_set)``.
+``data`` is stored as ``pa.binary()`` so reads decode straight to Python
+``bytes`` (no per-byte ``int`` materialisation). This is the difference
+between ~300 ms/row and ~0.2 ms/row on 2.3 MB samples.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def schema() -> pa.Schema:
             pa.field("width", pa.int32()),
             pa.field("n_channels", pa.int32()),
             pa.field("dtype", pa.string()),
-            pa.field("data", pa.list_(pa.uint8())),
+            pa.field("data", pa.binary()),
             pa.field("source", pa.string()),  # "raw" | "preprocessed"
             pa.field("created_at", pa.timestamp("us")),
         ]
@@ -149,7 +149,7 @@ def read_array(
     w = arrow.column("width")[0].as_py()
     c = arrow.column("n_channels")[0].as_py()
     dtype = arrow.column("dtype")[0].as_py()
-    data = bytes(arrow.column("data")[0].as_py())
+    data = arrow.column("data")[0].as_py()
     arr = np.frombuffer(data, dtype=dtype).copy()
     if c == 1:
         return arr.reshape((h, w))

@@ -165,7 +165,12 @@ def pregenerate_previews(
 
     Idempotent: skips files that already exist. Designed as a TaskManager target.
     Blocks the session-open UI via the /preview-status endpoint until done.
+
+    Reads all required arrays in a single batched Lance scan keyed by missing
+    sample_id, instead of one ``where=`` query per sample.
     """
+    import numpy as np
+
     with thread_db_session(db_url) as db:
         session = db.query(Session).filter(Session.id == session_id).first()
         if session is None:
@@ -184,47 +189,87 @@ def pregenerate_previews(
         on_progress(0, 0, "No samples to pre-generate")
         return {"generated": 0, "total": 0}
 
-    on_progress(0, total, f"Pre-generating previews for {total} samples...")
+    # Decide which sample_ids actually need work (idempotency).
+    def _missing(sid: str) -> bool:
+        if not (thumb_dir / f"{sid}.jpg").exists():
+            return True
+        for ch in range(channel_count):
+            if not (thumb_dir / f"{sid}_ch{ch}.jpg").exists():
+                return True
+        return False
+
+    work_ids = [sid for sid in sample_ids if _missing(sid)]
+    skipped = total - len(work_ids)
+    if not work_ids:
+        on_progress(total, total, f"Pre-generated 0/{total} (already cached)")
+        return {"generated": 0, "failed": 0, "total": total}
+
+    on_progress(0, total, f"Pre-generating previews for {len(work_ids)} samples...")
+
+    # One Lance scan per chunk of sample_ids — avoids per-sample table open +
+    # SQL filter and uses the new pa.binary() decode path (~1500× faster).
+    table_name = lance_store.images_table_name(session_id)
+    try:
+        table = lance_store.open_or_create_table(table_name, lance_images.schema(),
+                                                 create_if_missing=False)
+    except FileNotFoundError:
+        return {"generated": 0, "failed": len(work_ids), "total": total}
+
     generated = 0
     failed = 0
-
-    for i, sid in enumerate(sample_ids):
+    CHUNK = 256
+    progressed = skipped
+    for chunk_start in range(0, len(work_ids), CHUNK):
         if is_cancelled and is_cancelled():
             raise TaskCancelledException("Pregenerate previews cancelled")
+        chunk = work_ids[chunk_start : chunk_start + CHUNK]
+        ids_literal = ",".join(f"'{sid}'" for sid in chunk)
+        where = (f"sample_id IN ({ids_literal}) "
+                 f"AND channel_set = '{lance_images.DEFAULT_CHANNEL_SET}'")
+        arrow = table.search().where(where).to_arrow()
 
-        combined = thumb_dir / f"{sid}.jpg"
-        per_channel_targets = [
-            (ch, thumb_dir / f"{sid}_ch{ch}.jpg") for ch in range(channel_count)
-        ]
-        need_combined = not combined.exists()
-        need_per_channel = [t for (_, t) in per_channel_targets if not t.exists()]
+        # Build a dict so we render in input order (cancellation-friendly).
+        by_id: dict[str, tuple[bytes, int, int, int, str]] = {}
+        for i in range(arrow.num_rows):
+            sid = arrow.column("sample_id")[i].as_py()
+            by_id[sid] = (
+                arrow.column("data")[i].as_py(),         # bytes (pa.binary())
+                arrow.column("height")[i].as_py(),
+                arrow.column("width")[i].as_py(),
+                arrow.column("n_channels")[i].as_py(),
+                arrow.column("dtype")[i].as_py(),
+            )
 
-        if not need_combined and not need_per_channel:
-            if (i + 1) % _THUMB_BATCH == 0 or i + 1 == total:
-                on_progress(i + 1, total, f"Pre-generated {i + 1}/{total}")
-            continue
-
-        try:
-            arr = lance_images.read_array(session_id, sid)
-            if arr is None:
+        for sid in chunk:
+            if is_cancelled and is_cancelled():
+                raise TaskCancelledException("Pregenerate previews cancelled")
+            row = by_id.get(sid)
+            if row is None:
                 failed += 1
+                progressed += 1
                 continue
-            if need_combined:
-                render_array_to_thumbnail(arr, combined)
-            for ch, target in per_channel_targets:
-                if target.exists():
-                    continue
-                try:
-                    render_channel_to_thumbnail(arr, ch, target)
-                except IndexError:
-                    pass
-            generated += 1
-        except Exception:
-            logger.exception("preview pregen failed for sample %s", sid)
-            failed += 1
-
-        if (i + 1) % _THUMB_BATCH == 0 or i + 1 == total:
-            on_progress(i + 1, total, f"Pre-generated {i + 1}/{total}")
+            data, h, w, c, dtype = row
+            try:
+                arr = np.frombuffer(data, dtype=dtype).copy()
+                arr = arr.reshape((h, w)) if c == 1 else arr.reshape((h, w, c))
+                combined = thumb_dir / f"{sid}.jpg"
+                if not combined.exists():
+                    render_array_to_thumbnail(arr, combined)
+                for ch in range(channel_count):
+                    target = thumb_dir / f"{sid}_ch{ch}.jpg"
+                    if target.exists():
+                        continue
+                    try:
+                        render_channel_to_thumbnail(arr, ch, target)
+                    except IndexError:
+                        pass
+                generated += 1
+            except Exception:
+                logger.exception("preview pregen failed for sample %s", sid)
+                failed += 1
+            progressed += 1
+            if progressed % _THUMB_BATCH == 0 or progressed == total:
+                on_progress(progressed, total, f"Pre-generated {progressed}/{total}")
 
     return {"generated": generated, "failed": failed, "total": total}
 

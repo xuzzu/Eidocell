@@ -470,26 +470,39 @@ def _transform_mask_to_match(
     resize: bool,
 ) -> np.ndarray:
     """Apply spatial-only transforms so a mask lines up with its preprocessed
-    image. Uses nearest-neighbour resize and constant-zero padding to preserve
-    binary values; normalization/compensation/alignment are not applied.
+    image. Uses nearest-neighbour resize and constant-zero centre-pad / centre-crop
+    to preserve binary values; normalization/compensation/alignment are not applied.
+
+    Handles all four shape relationships between mask and target:
+      - exact match → return as-is
+      - resize=True → nearest-neighbour resize
+      - source smaller in a dim → centre-pad with zeros in that dim
+      - source larger in a dim → centre-crop in that dim
+      - mixed (e.g. wider but shorter than target) → crop one axis, pad the other
     """
     if target_shape is None:
         return mask
     import cv2
 
-    th, tw = target_shape
+    th, tw = int(target_shape[0]), int(target_shape[1])
     h, w = mask.shape[:2]
     if (h, w) == (th, tw):
         return mask
     if resize:
         return cv2.resize(mask, (tw, th), interpolation=cv2.INTER_NEAREST)
-    # Pad to target (centred, zero fill)
-    pad_h = max(0, th - h)
-    pad_w = max(0, tw - w)
-    top = pad_h // 2
-    left = pad_w // 2
+
+    # Crop the source where it is larger than the target.
+    crop_top = max(0, (h - th) // 2)
+    crop_left = max(0, (w - tw) // 2)
+    crop_h = min(h, th)
+    crop_w = min(w, tw)
+    cropped = mask[crop_top : crop_top + crop_h, crop_left : crop_left + crop_w]
+
+    # Centre-pad to the target where the cropped source is smaller.
     out = np.zeros((th, tw), dtype=mask.dtype)
-    out[top : top + h, left : left + w] = mask
+    pad_top = (th - crop_h) // 2
+    pad_left = (tw - crop_w) // 2
+    out[pad_top : pad_top + crop_h, pad_left : pad_left + crop_w] = cropped
     return out
 
 

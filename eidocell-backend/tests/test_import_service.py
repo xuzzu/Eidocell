@@ -98,9 +98,9 @@ def test_import_folder_with_channel_grouping_and_preprocessing(client, tmp_path)
     from core.storage import images as image_store
     arr = image_store.read_array(sid, samples["items"][0]["id"])
     assert arr is not None
-    # max H, W = 10, 14; 6 channels (3 RGB * 2 source files stacked).
+    # max-strategy now yields a square: max(max_h, max_w) = max(10, 14) = 14.
     h, w = arr.shape[:2]
-    assert (h, w) == (10, 14)
+    assert (h, w) == (14, 14)
 
     # Metadata file should exist.
     sess = client.get(f"/sessions/{sid}").json()
@@ -152,3 +152,86 @@ def test_import_bad_folder_400(client):
         "source_path": "/no/such/dir",
     })
     assert resp.status_code == 400
+
+
+# ── _transform_mask_to_match ────────────────────────────────────────────
+
+
+def test_transform_mask_exact_shape_returns_input():
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((10, 12), dtype=np.uint8)
+    out = _transform_mask_to_match(mask, (10, 12), resize=False)
+    assert out is mask  # no copy needed
+
+
+def test_transform_mask_none_target_returns_input():
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((10, 12), dtype=np.uint8)
+    out = _transform_mask_to_match(mask, None, resize=False)
+    assert out is mask
+
+
+def test_transform_mask_pads_smaller_source():
+    """Source smaller than target in both dims → centre-pad with zeros."""
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((4, 6), dtype=np.uint8)
+    out = _transform_mask_to_match(mask, (8, 10), resize=False)
+    assert out.shape == (8, 10)
+    # Centred: 2-row top/bottom border, 2-col left/right border, ones in middle
+    assert out[:2, :].sum() == 0 and out[-2:, :].sum() == 0
+    assert out[:, :2].sum() == 0 and out[:, -2:].sum() == 0
+    assert out[2:6, 2:8].sum() == 4 * 6
+
+
+def test_transform_mask_crops_larger_source():
+    """Source larger than target in both dims → centre-crop."""
+    from services.import_service import _transform_mask_to_match
+    mask = np.arange(60, dtype=np.uint8).reshape(6, 10)
+    out = _transform_mask_to_match(mask, (4, 6), resize=False)
+    assert out.shape == (4, 6)
+    # Centre crop: rows 1..5, cols 2..8 of the original.
+    np.testing.assert_array_equal(out, mask[1:5, 2:8])
+
+
+def test_transform_mask_mixed_pads_one_axis_crops_other():
+    """Regression test for the import crash:
+
+    Source shape (138, 93), target (138, 89): equal height, source wider →
+    crop width, no padding needed. Previously raised ValueError because the
+    pad-only branch couldn't shrink an axis.
+    """
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((138, 93), dtype=np.uint8)
+    out = _transform_mask_to_match(mask, (138, 89), resize=False)
+    assert out.shape == (138, 89)
+    assert out.sum() == 138 * 89  # nothing zero-padded since we cropped
+
+
+def test_transform_mask_mixed_taller_and_narrower():
+    """Source taller but narrower than target → pad width, crop height."""
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((20, 5), dtype=np.uint8)
+    out = _transform_mask_to_match(mask, (10, 8), resize=False)
+    assert out.shape == (10, 8)
+    # Width pad: 1 col left, 2 cols right (or vice-versa with floor div)
+    pad_left = (8 - 5) // 2
+    assert out[:, :pad_left].sum() == 0
+    assert out[:, pad_left + 5 :].sum() == 0
+    # Height crop: rows 5..15 of source (all ones) → all ones across kept cols
+    assert out[:, pad_left : pad_left + 5].sum() == 10 * 5
+
+
+def test_transform_mask_resize_uses_nearest_neighbour():
+    """resize=True scales the mask via NN, preserving binary values."""
+    from services.import_service import _transform_mask_to_match
+    mask = np.array([[1, 0], [0, 1]], dtype=np.uint8)
+    out = _transform_mask_to_match(mask, (4, 4), resize=True)
+    assert out.shape == (4, 4)
+    assert set(np.unique(out).tolist()) <= {0, 1}
+
+
+def test_transform_mask_preserves_dtype():
+    from services.import_service import _transform_mask_to_match
+    mask = np.ones((5, 5), dtype=np.uint16)
+    out = _transform_mask_to_match(mask, (7, 7), resize=False)
+    assert out.dtype == np.uint16

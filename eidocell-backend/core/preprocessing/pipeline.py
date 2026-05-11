@@ -49,6 +49,12 @@ class Pipeline:
 
 
 def _resolve_target_shape(strategy: str, explicit: tuple[int, int] | None, summary: dict | None) -> tuple[int, int] | None:
+    """Resolve the preprocessing target shape.
+
+    ``min`` / ``max`` / ``mean`` produce a **square** target whose side is the
+    chosen statistic over **all sides** (heights and widths combined) in the
+    dataset. ``explicit`` is honoured as-is and may be non-square.
+    """
     if strategy == "explicit":
         if explicit is None:
             raise ValueError("explicit_shape required when target_shape_strategy='explicit'")
@@ -56,11 +62,16 @@ def _resolve_target_shape(strategy: str, explicit: tuple[int, int] | None, summa
     if not summary:
         return None
     if strategy == "min":
-        return (summary["min_h"], summary["min_w"])
+        side = min(summary["min_h"], summary["min_w"])
+        return (side, side)
     if strategy == "max":
-        return (summary["max_h"], summary["max_w"])
+        side = max(summary["max_h"], summary["max_w"])
+        return (side, side)
     if strategy == "mean":
-        return (summary["mean_h"], summary["mean_w"])
+        # Each image contributes one H and one W, weighted equally — average the
+        # per-axis means.
+        side = int(round((summary["mean_h"] + summary["mean_w"]) / 2))
+        return (side, side)
     raise ValueError(f"unknown target_shape_strategy '{strategy}'")
 
 
