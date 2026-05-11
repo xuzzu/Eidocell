@@ -547,9 +547,9 @@ onUnmounted(stopPolling)
             <template v-else>
               <template v-if="preproc.target_shape_strategy === 'per_image_square'">
                 per-image square · pad {{ preproc.padding_method }}
-                <template v-if="preproc.post_resize_strategy !== 'none'">
+                <template v-if="preproc.post_resize_strategy !== 'none' && !(preproc.post_resize_strategy === 'explicit' && !preproc.post_resize_value)">
                   · resize
-                  <template v-if="preproc.post_resize_strategy === 'explicit'">{{ preproc.post_resize_value ?? '?' }}×{{ preproc.post_resize_value ?? '?' }}</template>
+                  <template v-if="preproc.post_resize_strategy === 'explicit'">{{ preproc.post_resize_value }}×{{ preproc.post_resize_value }}</template>
                   <template v-else>{{ preproc.post_resize_strategy.replace('_longest', '') }} longest</template>
                 </template>
               </template>
