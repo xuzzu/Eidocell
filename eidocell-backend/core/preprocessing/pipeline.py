@@ -143,19 +143,13 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
                     )
                 n = int(value)
             else:
-                key_map = {
-                    "min_longest": "min_longest",
-                    "max_longest": "max_longest",
-                    "mean_longest": "mean_longest",
-                }
-                if post not in key_map:
+                if post not in ("min_longest", "max_longest", "mean_longest"):
                     raise ValueError(f"unknown post_resize_strategy '{post}'")
-                key = key_map[post]
-                if not shape_summary or key not in shape_summary:
+                if not shape_summary or post not in shape_summary:
                     raise ValueError(
-                        f"shape_summary missing '{key}' for post_resize_strategy='{post}'"
+                        f"shape_summary missing '{post}' for post_resize_strategy='{post}'"
                     )
-                n = int(shape_summary[key])
+                n = int(shape_summary[post])
             steps.append(Step(
                 name="resize_to",
                 fn=_ops.resize_to,
