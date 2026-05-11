@@ -58,6 +58,60 @@ def test_pad_poisson_preserves_centre():
     assert (out[2:6, 2:6] == 50).all()
 
 
+def test_pad_to_square_landscape_input():
+    """Wider-than-tall input pads vertically to a square of side w."""
+    img = np.ones((4, 8), dtype=np.uint8) * 9
+    out, meta = ops.pad_to_square(img, method="constant", constant_value=0)
+    assert out.shape == (8, 8)
+    assert meta["target"] == [8, 8]
+    # Original block centred in the output.
+    assert (out[2:6, :] == 9).all()
+    assert out[0, 0] == 0
+
+
+def test_pad_to_square_portrait_input():
+    """Taller-than-wide input pads horizontally to a square of side h."""
+    img = np.ones((10, 4), dtype=np.uint8) * 7
+    out, _ = ops.pad_to_square(img, method="constant", constant_value=0)
+    assert out.shape == (10, 10)
+    assert (out[:, 3:7] == 7).all()
+
+
+def test_pad_to_square_already_square_is_noop():
+    img = np.ones((6, 6), dtype=np.uint8) * 3
+    out, meta = ops.pad_to_square(img, method="constant")
+    assert out.shape == (6, 6)
+    assert (out == 3).all()
+    assert meta["pad"] == [0, 0, 0, 0]
+
+
+def test_pad_to_square_multichannel_hwc():
+    img = np.ones((4, 8, 3), dtype=np.uint8) * 5
+    out, _ = ops.pad_to_square(img, method="constant", constant_value=0)
+    assert out.shape == (8, 8, 3)
+    assert (out[2:6, :, :] == 5).all()
+
+
+def test_pad_to_square_poisson_preserves_centre():
+    img = np.full((4, 8), 50, dtype=np.uint8)
+    out, _ = ops.pad_to_square(img, method="poisson")
+    assert out.shape == (8, 8)
+    assert (out[2:6, :] == 50).all()
+
+
+def test_pad_to_square_replicate_keeps_input_block():
+    img = np.full((4, 8), 7, dtype=np.uint8)
+    out, _ = ops.pad_to_square(img, method="replicate")
+    assert out.shape == (8, 8)
+    assert (out == 7).all()
+
+
+def test_pad_to_square_rejects_unsupported_ndim():
+    bad = np.zeros((2, 2, 2, 2), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        ops.pad_to_square(bad)
+
+
 def test_resize_changes_shape_only():
     img = np.zeros((10, 10), dtype=np.uint8)
     out, _ = ops.resize_to(img, (20, 30))

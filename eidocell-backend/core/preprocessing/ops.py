@@ -95,7 +95,7 @@ def pad_to(
     pad_h = max(0, th - h)
     pad_w = max(0, tw - w)
     if pad_h == 0 and pad_w == 0:
-        return _restore(img, was_2d), {"method": method, "pad": (0, 0, 0, 0), "target": list(target_shape)}
+        return _restore(img, was_2d), {"method": method, "pad": [0, 0, 0, 0], "target": list(target_shape)}
 
     top = pad_h // 2
     bottom = pad_h - top
@@ -138,6 +138,28 @@ def pad_to(
         "pad": [top, bottom, left, right],
         "target": [th, tw],
     }
+
+
+def pad_to_square(
+    arr: np.ndarray,
+    *,
+    method: str = "constant",
+    constant_value: float = 0.0,
+) -> tuple[np.ndarray, dict]:
+    """Pad ``arr`` to a square whose side equals max(H, W). Centred.
+
+    Thin wrapper over ``pad_to`` that derives the target shape per-image
+    from the input's longest side. Used by the ``per_image_square`` import
+    strategy.
+    """
+    if arr.ndim == 2:
+        h, w = arr.shape
+    elif arr.ndim == 3:
+        h, w, _ = arr.shape
+    else:
+        raise ValueError(f"unsupported ndim {arr.ndim}")
+    side = max(h, w)
+    return pad_to(arr, (side, side), method=method, constant_value=constant_value)
 
 
 def resize_to(arr: np.ndarray, target_shape: tuple[int, int]) -> tuple[np.ndarray, dict]:
@@ -240,6 +262,7 @@ __all__ = [
     "normalize_minmax",
     "normalize_zscore",
     "pad_to",
+    "pad_to_square",
     "resize_to",
     "align_channels",
     "compensate",
