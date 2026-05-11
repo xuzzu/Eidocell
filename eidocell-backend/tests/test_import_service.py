@@ -235,3 +235,49 @@ def test_transform_mask_preserves_dtype():
     mask = np.ones((5, 5), dtype=np.uint16)
     out = _transform_mask_to_match(mask, (7, 7), resize=False)
     assert out.dtype == np.uint16
+
+
+def test_import_folder_per_image_square_with_post_resize(client, tmp_path):
+    """per_image_square + post_resize_strategy=max_longest produces uniformly sized N×N outputs."""
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+    # Three images with different shapes and longest sides 12, 30, 40.
+    shapes = [(10, 12), (30, 8), (40, 15)]
+    for i, hw in enumerate(shapes):
+        arr = np.full((*hw, 3), 20 + i * 30, dtype=np.uint8)
+        Image.fromarray(arr).save(img_dir / f"cell_{i:03d}.png")
+
+    sid = _create_session(client)
+    resp = client.post(f"/sessions/{sid}/imports/", json={
+        "source_kind": "folder",
+        "source_path": str(img_dir),
+        "channel_grouping": False,
+        "preprocessing": {
+            "target_shape_strategy": "per_image_square",
+            "padding_method": "constant",
+            "post_resize_strategy": "max_longest",
+            "normalize": "none",
+        },
+    })
+    assert resp.status_code == 202, resp.text
+    info = _wait_for_task(client, resp.json()["task_id"])
+    assert info["status"] == "completed", info
+
+    detail = client.get(f"/sessions/{sid}/imports/{resp.json()['import_id']}").json()
+    assert detail["sample_count"] == 3
+
+    # Every output is square at max_longest = 40.
+    from core.storage import images as image_store
+    samples = client.post(f"/sessions/{sid}/samples/list", json={}).json()["items"]
+    for s in samples:
+        arr = image_store.read_array(sid, s["id"])
+        assert arr is not None
+        h, w = arr.shape[:2]
+        assert (h, w) == (40, 40), f"sample {s['id']} has shape {(h, w)}"
+
+    # Pipeline metadata records both steps.
+    sess = client.get(f"/sessions/{sid}").json()
+    meta_path = Path(sess["session_folder"]) / "imports" / f"{resp.json()['import_id']}.json"
+    text = meta_path.read_text()
+    assert "pad_to_square" in text
+    assert "resize_to" in text
