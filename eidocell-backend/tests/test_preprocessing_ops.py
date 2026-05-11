@@ -268,3 +268,117 @@ def test_resolve_target_shape_explicit_requires_value():
     from core.preprocessing.pipeline import _resolve_target_shape
     with pytest.raises(ValueError):
         _resolve_target_shape("explicit", None, summary=None)
+
+
+# ── per_image_square strategy ───────────────────────────────────────────
+
+
+def test_pipeline_per_image_square_no_post_resize():
+    """per_image_square strategy emits a pad_to_square step and no global pad/resize."""
+    p = build_pipeline({
+        "target_shape_strategy": "per_image_square",
+        "padding_method": "constant",
+    })
+    step_names = [s.name for s in p.steps]
+    assert step_names == ["pad_to_square"]
+    assert p.steps[0].params == {"method": "constant"}
+    assert p.target_shape is None  # output shape varies per image
+
+
+def test_pipeline_per_image_square_applies_per_image_shape():
+    """Two different non-square inputs produce two different square outputs."""
+    p = build_pipeline({
+        "target_shape_strategy": "per_image_square",
+        "padding_method": "constant",
+    })
+    img_a = np.zeros((4, 10), dtype=np.uint8)
+    img_b = np.zeros((20, 8), dtype=np.uint8)
+    out_a, _ = p.apply(img_a)
+    out_b, _ = p.apply(img_b)
+    assert out_a.shape == (10, 10)
+    assert out_b.shape == (20, 20)
+
+
+def test_pipeline_per_image_square_with_explicit_post_resize():
+    """post_resize_strategy='explicit' appends a resize_to((N, N)) step."""
+    p = build_pipeline({
+        "target_shape_strategy": "per_image_square",
+        "padding_method": "constant",
+        "post_resize_strategy": "explicit",
+        "post_resize_value": 32,
+    })
+    step_names = [s.name for s in p.steps]
+    assert step_names == ["pad_to_square", "resize_to"]
+    assert p.steps[1].params == {"target_shape": (32, 32)}
+    assert p.target_shape == (32, 32)
+    # End-to-end: any input ends up 32×32.
+    img = np.zeros((4, 10), dtype=np.uint8)
+    out, _ = p.apply(img)
+    assert out.shape == (32, 32)
+
+
+def test_pipeline_per_image_square_with_max_longest_post_resize():
+    """post_resize_strategy='max_longest' reads from shape_summary."""
+    summary = {
+        "count": 3, "min_h": 4, "max_h": 20, "mean_h": 12,
+        "min_w": 8, "max_w": 16, "mean_w": 12,
+        "min_longest": 10, "max_longest": 24, "mean_longest": 17,
+        "n_channels": 1,
+    }
+    p = build_pipeline(
+        {
+            "target_shape_strategy": "per_image_square",
+            "padding_method": "constant",
+            "post_resize_strategy": "max_longest",
+        },
+        shape_summary=summary,
+    )
+    step_names = [s.name for s in p.steps]
+    assert step_names == ["pad_to_square", "resize_to"]
+    assert p.steps[1].params == {"target_shape": (24, 24)}
+    assert p.target_shape == (24, 24)
+
+
+def test_pipeline_per_image_square_min_and_mean_longest():
+    summary = {
+        "count": 3, "min_h": 4, "max_h": 20, "mean_h": 12,
+        "min_w": 8, "max_w": 16, "mean_w": 12,
+        "min_longest": 10, "max_longest": 24, "mean_longest": 17,
+        "n_channels": 1,
+    }
+    p_min = build_pipeline(
+        {"target_shape_strategy": "per_image_square",
+         "padding_method": "constant",
+         "post_resize_strategy": "min_longest"},
+        shape_summary=summary,
+    )
+    assert p_min.steps[1].params == {"target_shape": (10, 10)}
+    p_mean = build_pipeline(
+        {"target_shape_strategy": "per_image_square",
+         "padding_method": "constant",
+         "post_resize_strategy": "mean_longest"},
+        shape_summary=summary,
+    )
+    assert p_mean.steps[1].params == {"target_shape": (17, 17)}
+
+
+def test_pipeline_per_image_square_dataset_stat_without_summary_raises():
+    """A dataset-stat post-resize without a shape_summary is a usage error."""
+    with pytest.raises(ValueError, match="shape_summary"):
+        build_pipeline({
+            "target_shape_strategy": "per_image_square",
+            "padding_method": "constant",
+            "post_resize_strategy": "max_longest",
+        })
+
+
+def test_pipeline_per_image_square_keeps_normalize_after():
+    """Order: pad_to_square → resize_to → normalize."""
+    p = build_pipeline({
+        "target_shape_strategy": "per_image_square",
+        "padding_method": "constant",
+        "post_resize_strategy": "explicit",
+        "post_resize_value": 16,
+        "normalize": "zscore",
+    })
+    assert [s.name for s in p.steps] == ["pad_to_square", "resize_to", "normalize_zscore"]

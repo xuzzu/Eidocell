@@ -92,8 +92,8 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
     cfg = dict(config or {})
     strategy = cfg.get("target_shape_strategy", "none")
     explicit = cfg.get("explicit_shape")
-    target = None
-    if strategy != "none":
+    target: tuple[int, int] | None = None
+    if strategy not in ("none", "per_image_square"):
         target = _resolve_target_shape(
             strategy,
             tuple(explicit) if explicit else None,
@@ -127,7 +127,42 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
             params={"matrix": cfg["compensation_matrix"]},
         ))
 
-    if target is not None:
+    if strategy == "per_image_square":
+        steps.append(Step(
+            name="pad_to_square",
+            fn=_ops.pad_to_square,
+            params={"method": cfg.get("padding_method", "constant")},
+        ))
+        post = cfg.get("post_resize_strategy", "none")
+        if post != "none":
+            if post == "explicit":
+                value = cfg.get("post_resize_value")
+                if value is None:
+                    raise ValueError(
+                        "post_resize_value required when post_resize_strategy='explicit'"
+                    )
+                n = int(value)
+            else:
+                key_map = {
+                    "min_longest": "min_longest",
+                    "max_longest": "max_longest",
+                    "mean_longest": "mean_longest",
+                }
+                if post not in key_map:
+                    raise ValueError(f"unknown post_resize_strategy '{post}'")
+                key = key_map[post]
+                if not shape_summary or key not in shape_summary:
+                    raise ValueError(
+                        f"shape_summary missing '{key}' for post_resize_strategy='{post}'"
+                    )
+                n = int(shape_summary[key])
+            steps.append(Step(
+                name="resize_to",
+                fn=_ops.resize_to,
+                params={"target_shape": (n, n)},
+            ))
+            target = (n, n)
+    elif target is not None:
         if cfg.get("resize"):
             steps.append(Step(
                 name="resize_to",
