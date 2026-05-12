@@ -150,6 +150,7 @@ class GateUpdate(BaseModel):
     # parent_gate_id: explicit None = move to root; absent = leave unchanged.
     # Use model_fields_set to distinguish at the service layer.
     parent_gate_id: str | None = None
+    clear_rebound: bool = False
 
 
 class BooleanGateCreate(BaseModel):
@@ -184,5 +185,6 @@ class GateOut(BaseModel):
     parent_gate_id: str | None = None
     operator: str | None = None
     source_gate_ids: list[str] | None = None
+    rebound_at: datetime | None = None
 
     model_config = {"from_attributes": True}

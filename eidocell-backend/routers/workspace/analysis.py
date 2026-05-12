@@ -151,6 +151,7 @@ def update_gate(session_id: str, gate_id: str, data: GateUpdate, db: DbSession =
         db, gate_id, data.name, data.color, data.definition,
         parent_gate_id=data.parent_gate_id,
         update_parent="parent_gate_id" in data.model_fields_set,
+        clear_rebound=data.clear_rebound,
     )
 
 

@@ -4,6 +4,7 @@ import logging
 import math
 import random
 import struct
+from datetime import datetime
 
 import numpy as np
 from fastapi import HTTPException
@@ -107,12 +108,51 @@ def update_plot(
                     status_code=400,
                     detail=f"{plot.chart_type.title()} requires x_variable and y_variable",
                 )
+        _rebind_plot_gates(db, plot, plot.parameters or {}, parameters)
         plot.parameters = parameters
 
     db.commit()
     db.refresh(plot)
+    _update_active_samples(db, plot.session_id)
     gate_count = db.query(func.count(Gate.id)).filter(Gate.plot_id == plot.id).scalar()
     return _plot_to_out(plot, gate_count)
+
+
+def _rebind_plot_gates(
+    db: DbSession, plot: Plot, old_params: dict, new_params: dict
+) -> None:
+    """Positionally rebind a plot's geometric gates when axes change.
+
+    FCS Express semantics: gate.definition coordinates are preserved verbatim;
+    only the parameter names referenced by each slot are rewritten to the plot's
+    new axes. Boolean gates and gates on other plots are untouched.
+    """
+    new_x = new_params.get("x_variable")
+    new_y = new_params.get("y_variable")
+    old_x = old_params.get("x_variable")
+    old_y = old_params.get("y_variable")
+    if new_x == old_x and new_y == old_y:
+        return
+
+    gates = (
+        db.query(Gate)
+        .filter(Gate.plot_id == plot.id, Gate.gate_type != "boolean")
+        .all()
+    )
+    is_1d = plot.chart_type == "histogram"
+    stamp = datetime.utcnow()
+    for g in gates:
+        params = list(g.parameters or [])
+        if is_1d:
+            if new_x and len(params) >= 1:
+                params[0] = new_x
+        else:
+            if new_x and len(params) >= 1:
+                params[0] = new_x
+            if new_y and len(params) >= 2:
+                params[1] = new_y
+        g.parameters = params
+        g.rebound_at = stamp
 
 
 def delete_plot(db: DbSession, plot_id: str) -> None:
@@ -425,7 +465,8 @@ def list_gates(db: DbSession, session_id: str, plot_id: str | None = None) -> li
 def update_gate(db: DbSession, gate_id: str, name: str | None, color: str | None,
                 definition: dict | None,
                 parent_gate_id: str | None = None,
-                update_parent: bool = False) -> dict:
+                update_parent: bool = False,
+                clear_rebound: bool = False) -> dict:
     gate = db.query(Gate).filter(Gate.id == gate_id).first()
     if not gate:
         raise HTTPException(status_code=404, detail="Gate not found")
@@ -434,6 +475,8 @@ def update_gate(db: DbSession, gate_id: str, name: str | None, color: str | None
         gate.name = name
     if color is not None:
         gate.color = color
+    if clear_rebound:
+        gate.rebound_at = None
     if definition is not None:
         if gate.gate_type == "boolean":
             raise HTTPException(status_code=400, detail="Boolean gates have no geometric definition")
@@ -546,6 +589,7 @@ def _gate_to_out(gate: Gate, sample_count: int, total: int) -> dict:
         "parent_gate_id": gate.parent_gate_id,
         "operator": gate.operator,
         "source_gate_ids": gate.source_gate_ids,
+        "rebound_at": gate.rebound_at,
     }
 
 
