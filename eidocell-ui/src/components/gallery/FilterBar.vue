@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowUp, ArrowDown, Search, SearchCheck, EyeOff, Eye, Columns3, Image as ImageIcon } from 'lucide-vue-next'
 import { useGalleryStore } from '@/stores/gallery'
 import ChannelsWizardPopover from './ChannelsWizardPopover.vue'
@@ -9,6 +9,7 @@ const gallery = useGalleryStore()
 const props = defineProps<{
   zoomLevel: number
   maskView: boolean
+  maskAvailable: boolean
   inspectMode: boolean
 }>()
 
@@ -17,6 +18,14 @@ const emit = defineEmits<{
   'update:maskView': [value: boolean]
   'update:inspectMode': [value: boolean]
 }>()
+
+// If masks disappear (e.g. on session swap), force the toggle off so the
+// SampleCardGrid doesn't render in a half-broken state.
+watch(() => props.maskAvailable, (available) => {
+  if (!available && props.maskView) {
+    emit('update:maskView', false)
+  }
+})
 
 function setSortOrder(order: 'asc' | 'desc') {
   gallery.setSort(gallery.sortBy, order)
@@ -110,14 +119,24 @@ const channelsButtonActive = computed(() =>
     </button>
 
     <!-- MASK VIEW toggle -->
-    <button
-      class="h-8 px-4 flex items-center gap-2 rounded-[2px] bg-neutral text-neutral-content text-[11px] font-bold tracking-widest uppercase transition-opacity duration-200"
-      :class="props.maskView ? 'opacity-100' : 'opacity-50 hover:opacity-80'"
-      @click="emit('update:maskView', !props.maskView)"
+    <div
+      class="tooltip tooltip-bottom"
+      :data-tip="props.maskAvailable ? undefined : 'No masks extracted yet — run segmentation first'"
     >
-      <component :is="props.maskView ? Eye : EyeOff" class="w-4 h-4" />
-      MASK VIEW
-    </button>
+      <button
+        class="h-8 px-4 flex items-center gap-2 rounded-[2px] bg-neutral text-neutral-content text-[11px] font-bold tracking-widest uppercase transition-opacity duration-200"
+        :class="[
+          !props.maskAvailable
+            ? 'opacity-30 cursor-not-allowed'
+            : (props.maskView ? 'opacity-100' : 'opacity-50 hover:opacity-80'),
+        ]"
+        :disabled="!props.maskAvailable"
+        @click="props.maskAvailable && emit('update:maskView', !props.maskView)"
+      >
+        <component :is="props.maskView && props.maskAvailable ? Eye : EyeOff" class="w-4 h-4" />
+        MASK VIEW
+      </button>
+    </div>
 
     <!-- CHANNELS wizard popover trigger -->
     <button

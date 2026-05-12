@@ -97,6 +97,7 @@ onUnmounted(() => {
         <FilterBar
           :zoom-level="zoomLevel"
           :mask-view="maskViewEnabled"
+          :mask-available="gallery.sessionHasAnyMask"
           :inspect-mode="gallery.inspectMode"
           @update:zoom-level="zoomLevel = $event"
           @update:mask-view="maskViewEnabled = $event"
