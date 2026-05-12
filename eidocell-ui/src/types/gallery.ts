@@ -16,6 +16,7 @@ export interface SamplePage {
   total: number
   offset: number
   limit: number
+  session_has_any_mask: boolean
 }
 
 export interface FilterCondition {

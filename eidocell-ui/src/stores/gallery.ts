@@ -32,6 +32,10 @@ export const useGalleryStore = defineStore('gallery', () => {
   // mask-overlay URLs to defeat the browser's in-memory image cache when the
   // file at a stable URL has been overwritten.
   const maskVersion = ref(0)
+  // True when the session has at least one extracted mask. Drives the
+  // FilterBar MASK VIEW toggle's disabled state. Refreshed on every
+  // gallery fetch (page-listing also returns this aggregate).
+  const sessionHasAnyMask = ref(false)
 
   // Persists across view switches so the toggle isn't reset when GalleryView
   // remounts after the user navigates away and back.
@@ -57,6 +61,7 @@ export const useGalleryStore = defineStore('gallery', () => {
     loading.value = false
     sortableAttributes.value = []
     maskVersion.value = 0
+    sessionHasAnyMask.value = false
   }
 
   function openDetail(sample: SampleOut, channel = 0) {
@@ -168,6 +173,7 @@ export const useGalleryStore = defineStore('gallery', () => {
       })
       samples.value = page.items
       total.value = page.total
+      sessionHasAnyMask.value = page.session_has_any_mask
     } finally {
       loading.value = false
     }
@@ -186,6 +192,7 @@ export const useGalleryStore = defineStore('gallery', () => {
     })
     samples.value = [...samples.value, ...page.items]
     total.value = page.total
+    sessionHasAnyMask.value = page.session_has_any_mask
   }
 
   async function fetchClasses() {
@@ -266,7 +273,7 @@ export const useGalleryStore = defineStore('gallery', () => {
     samples, total, offset, limit, sortBy, sortOrder, filters,
     selectedIds, detailSample, detailChannel, classes, loading,
     sortableAttributes, sortableAttributesByChannel,
-    maskVersion, inspectMode, openSimilarityDialog,
+    maskVersion, sessionHasAnyMask, inspectMode, openSimilarityDialog,
     channelDisplayMode, selectedChannel, selectedChannels,
     sessionChannelCount, sessionChannelNames,
     $reset, openDetail,
