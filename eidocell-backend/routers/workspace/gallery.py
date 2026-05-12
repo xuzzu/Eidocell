@@ -30,12 +30,13 @@ def list_samples(
     """List samples with filtering, sorting, and pagination.
     Uses POST because filter conditions can be complex."""
     session_service.get_session(db, session_id)  # validates session exists
-    items, total = gallery_service.list_samples(db, session_id, params)
+    items, total, session_has_any_mask = gallery_service.list_samples(db, session_id, params)
     return SamplePage(
         items=items,
         total=total,
         offset=params.offset,
         limit=params.limit,
+        session_has_any_mask=session_has_any_mask,
     )
 
 

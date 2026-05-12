@@ -27,8 +27,17 @@ from schemas.workspace.gallery import (
 # ── Samples ──────────────────────────────────────────────────────────────
 
 
-def list_samples(db: DbSession, session_id: str, params: SampleListParams) -> tuple[list[dict], int]:
+def list_samples(
+    db: DbSession, session_id: str, params: SampleListParams
+) -> tuple[list[dict], int, bool]:
     """List samples with filters/sort. attr:* sorts are resolved via Lance."""
+    session_has_any_mask = (
+        db.query(Mask.id)
+        .join(Sample, Mask.sample_id == Sample.id)
+        .filter(Sample.session_id == session_id)
+        .first()
+        is not None
+    )
     base_query = (
         db.query(Sample, SampleClass)
         .outerjoin(SampleClass, Sample.class_id == SampleClass.id)
@@ -46,7 +55,7 @@ def list_samples(db: DbSession, session_id: str, params: SampleListParams) -> tu
         candidate_rows = base_query.all()
         sample_by_id = {s.id: (s, cls) for s, cls in candidate_rows}
         if not sample_by_id:
-            return [], 0
+            return [], 0, session_has_any_mask
 
         ordered_ids = _attr_sorted_sample_ids(
             session_id,
@@ -98,7 +107,7 @@ def list_samples(db: DbSession, session_id: str, params: SampleListParams) -> tu
             "n_channels": _n_channels_from_meta(sample.channels),
         })
 
-    return items, total
+    return items, total, session_has_any_mask
 
 
 def _n_channels_from_meta(channels_meta: dict | None) -> int:

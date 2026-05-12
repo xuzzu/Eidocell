@@ -21,6 +21,7 @@ class SamplePage(BaseModel):
     total: int
     offset: int
     limit: int
+    session_has_any_mask: bool = False
 
 
 class FilterCondition(BaseModel):

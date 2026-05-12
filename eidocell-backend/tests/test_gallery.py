@@ -254,43 +254,64 @@ def test_real_images_gallery(client, real_images_dir):
 # ── session_has_any_mask aggregate ───────────────────────────────────────
 
 
-def test_samples_page_session_has_any_mask_false_when_no_masks(client, tmp_path):
-    """SamplePage.session_has_any_mask is False on a fresh session with no segmentation."""
+def _wait_for_task(client, task_id: str, timeout_s: float = 10.0) -> dict:
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        info = client.get(f"/tasks/{task_id}").json()
+        if info["status"] in ("completed", "failed", "cancelled"):
+            return info
+        time.sleep(0.05)
+    raise AssertionError(f"task {task_id} did not finish within {timeout_s}s")
+
+
+def _import_circle_images(client, tmp_path) -> str:
+    """Create a session, import 5 circle PNGs, return session id once import completes."""
+    import numpy as np
     img_dir = tmp_path / "imgs"
     img_dir.mkdir()
-    for i in range(3):
-        Image.new("RGB", (32, 32)).save(img_dir / f"x_{i}.png")
-    session = client.post("/sessions/", json={
-        "name": "no-masks", "images_directory": str(img_dir),
-    }).json()
-    sid = session["id"]
+    size = (100, 100)
+    cy, cx = size[0] // 2, size[1] // 2
+    radius = min(size) // 4
+    yy, xx = np.ogrid[:size[0], :size[1]]
+    circle = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+    for i in range(5):
+        img = np.zeros((*size, 3), dtype=np.uint8)
+        img[circle] = [200, 200, 200]
+        Image.fromarray(img).save(img_dir / f"cell_{i:03d}.png")
 
+    sid = client.post("/sessions/", json={"name": "mask-flag"}).json()["id"]
+    resp = client.post(f"/sessions/{sid}/imports/", json={
+        "source_kind": "folder",
+        "source_path": str(img_dir),
+        "channel_grouping": False,
+        "preprocessing": None,
+    })
+    assert resp.status_code == 202, resp.text
+    info = _wait_for_task(client, resp.json()["task_id"])
+    assert info["status"] == "completed", info
+    return sid
+
+
+def test_samples_page_session_has_any_mask_false_when_no_masks(client, tmp_path):
+    """SamplePage.session_has_any_mask is False on a fresh session with no segmentation."""
+    sid = _import_circle_images(client, tmp_path)
     resp = client.post(f"/sessions/{sid}/samples/list", json={
         "offset": 0, "limit": 100, "sort_by": "filename", "sort_order": "asc",
     })
     assert resp.status_code == 200
     body = resp.json()
+    assert body["total"] == 5
     assert body["session_has_any_mask"] is False
 
 
 def test_samples_page_session_has_any_mask_true_after_segmentation(client, tmp_path):
     """After segmentation creates at least one Mask row, the flag becomes True."""
-    import numpy as np
-    img_dir = tmp_path / "imgs"
-    img_dir.mkdir()
-    for i in range(3):
-        arr = np.zeros((32, 32, 3), dtype=np.uint8)
-        arr[8:24, 8:24] = 200
-        Image.fromarray(arr).save(img_dir / f"x_{i}.png")
-    session = client.post("/sessions/", json={
-        "name": "with-masks", "images_directory": str(img_dir),
-    }).json()
-    sid = session["id"]
+    sid = _import_circle_images(client, tmp_path)
     client.post(f"/sessions/{sid}/segmentation/run", json={
         "method": "otsu_intensity",
         "params": {"distance_from_center": 80, "min_component_size": 10},
     })
-
     resp = client.post(f"/sessions/{sid}/samples/list", json={
         "offset": 0, "limit": 100, "sort_by": "filename", "sort_order": "asc",
     })
