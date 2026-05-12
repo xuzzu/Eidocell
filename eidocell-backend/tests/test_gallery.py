@@ -249,3 +249,50 @@ def test_real_images_gallery(client, real_images_dir):
     sample_id = data["items"][0]["id"]
     resp = client.get(f"/sessions/{sid}/samples/{sample_id}/thumbnail")
     assert resp.status_code == 200
+
+
+# ── session_has_any_mask aggregate ───────────────────────────────────────
+
+
+def test_samples_page_session_has_any_mask_false_when_no_masks(client, tmp_path):
+    """SamplePage.session_has_any_mask is False on a fresh session with no segmentation."""
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+    for i in range(3):
+        Image.new("RGB", (32, 32)).save(img_dir / f"x_{i}.png")
+    session = client.post("/sessions/", json={
+        "name": "no-masks", "images_directory": str(img_dir),
+    }).json()
+    sid = session["id"]
+
+    resp = client.post(f"/sessions/{sid}/samples/list", json={
+        "offset": 0, "limit": 100, "sort_by": "filename", "sort_order": "asc",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_has_any_mask"] is False
+
+
+def test_samples_page_session_has_any_mask_true_after_segmentation(client, tmp_path):
+    """After segmentation creates at least one Mask row, the flag becomes True."""
+    import numpy as np
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+    for i in range(3):
+        arr = np.zeros((32, 32, 3), dtype=np.uint8)
+        arr[8:24, 8:24] = 200
+        Image.fromarray(arr).save(img_dir / f"x_{i}.png")
+    session = client.post("/sessions/", json={
+        "name": "with-masks", "images_directory": str(img_dir),
+    }).json()
+    sid = session["id"]
+    client.post(f"/sessions/{sid}/segmentation/run", json={
+        "method": "otsu_intensity",
+        "params": {"distance_from_center": 80, "min_component_size": 10},
+    })
+
+    resp = client.post(f"/sessions/{sid}/samples/list", json={
+        "offset": 0, "limit": 100, "sort_by": "filename", "sort_order": "asc",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["session_has_any_mask"] is True
