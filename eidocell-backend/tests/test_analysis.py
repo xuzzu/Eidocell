@@ -592,3 +592,196 @@ def test_update_gate_validates_definition(client, session_with_masks):
         "definition": {"min": 200, "max": 100},
     })
     assert resp.status_code == 400
+
+
+# ── Axis rebind ─────────────────────────────────────────────────────────
+
+
+def _wait_for_task(client, task_id: str, timeout_s: float = 10.0) -> dict:
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        info = client.get(f"/tasks/{task_id}").json()
+        if info["status"] in ("completed", "failed", "cancelled"):
+            return info
+        time.sleep(0.05)
+    raise AssertionError(f"task {task_id} did not finish within {timeout_s}s")
+
+
+@pytest.fixture()
+def segmented_session(client, tmp_path):
+    """Create a session, import 5 circle PNGs through the real import flow,
+    run segmentation. Returns the session id."""
+    img_dir = tmp_path / "imgs"
+    img_dir.mkdir()
+    for i in range(5):
+        _create_test_image(img_dir / f"cell_{i:03d}.png", brightness=50 + i * 30)
+
+    sid = client.post("/sessions/", json={"name": "rebind"}).json()["id"]
+    resp = client.post(f"/sessions/{sid}/imports/", json={
+        "source_kind": "folder",
+        "source_path": str(img_dir),
+        "channel_grouping": False,
+        "preprocessing": None,
+    })
+    assert resp.status_code == 202, resp.text
+    info = _wait_for_task(client, resp.json()["task_id"])
+    assert info["status"] == "completed", info
+
+    client.post(f"/sessions/{sid}/segmentation/run", json={
+        "method": "otsu_intensity",
+        "params": {"distance_from_center": 80, "min_component_size": 10},
+    })
+    return sid
+
+
+def test_axis_rebind_histogram_updates_gate_parameters(client, segmented_session):
+    """Changing histogram x_variable rebinds parameters[0] and stamps rebound_at."""
+    sid = segmented_session
+    plot = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "histogram",
+        "parameters": {"x_variable": "area", "num_bins": 20},
+    }).json()
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+        "gate_type": "interval",
+        "definition": {"min": 0.0, "max": 1e9},
+        "parameters": ["area"],
+    }).json()
+    assert gate["rebound_at"] is None
+
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot['id']}", json={
+        "parameters": {"x_variable": "mean_intensity", "num_bins": 20},
+    })
+
+    refreshed = next(g for g in client.get(f"/sessions/{sid}/analysis/gates").json()
+                     if g["id"] == gate["id"])
+    assert refreshed["parameters"] == ["mean_intensity"]
+    assert refreshed["definition"] == {"min": 0.0, "max": 1e9}
+    assert refreshed["rebound_at"] is not None
+
+
+def test_axis_rebind_scatter_xy(client, segmented_session):
+    """Changing both axes on a scatter plot rebinds both gate slots."""
+    sid = segmented_session
+    plot = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "scatter",
+        "parameters": {"x_variable": "area", "y_variable": "mean_intensity"},
+    }).json()
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+        "gate_type": "rectangular",
+        "definition": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0},
+        "parameters": ["area", "mean_intensity"],
+    }).json()
+
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot['id']}", json={
+        "parameters": {"x_variable": "solidity", "y_variable": "eccentricity"},
+    })
+
+    refreshed = next(g for g in client.get(f"/sessions/{sid}/analysis/gates").json()
+                     if g["id"] == gate["id"])
+    assert refreshed["parameters"] == ["solidity", "eccentricity"]
+    assert refreshed["rebound_at"] is not None
+
+
+def test_axis_rebind_only_x(client, segmented_session):
+    """Changing only x leaves y slot untouched."""
+    sid = segmented_session
+    plot = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "scatter",
+        "parameters": {"x_variable": "area", "y_variable": "mean_intensity"},
+    }).json()
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+        "gate_type": "rectangular",
+        "definition": {"x": 0.0, "y": 0.0, "width": 50.0, "height": 50.0},
+        "parameters": ["area", "mean_intensity"],
+    }).json()
+
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot['id']}", json={
+        "parameters": {"x_variable": "solidity", "y_variable": "mean_intensity"},
+    })
+
+    refreshed = next(g for g in client.get(f"/sessions/{sid}/analysis/gates").json()
+                     if g["id"] == gate["id"])
+    assert refreshed["parameters"] == ["solidity", "mean_intensity"]
+
+
+def test_axis_rebind_noop_when_axes_unchanged(client, segmented_session):
+    """Updating non-axis params (e.g. num_bins) does NOT stamp rebound_at."""
+    sid = segmented_session
+    plot = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "histogram",
+        "parameters": {"x_variable": "area", "num_bins": 20},
+    }).json()
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+        "gate_type": "interval",
+        "definition": {"min": 0.0, "max": 1e9},
+        "parameters": ["area"],
+    }).json()
+
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot['id']}", json={
+        "parameters": {"x_variable": "area", "num_bins": 50},
+    })
+
+    refreshed = next(g for g in client.get(f"/sessions/{sid}/analysis/gates").json()
+                     if g["id"] == gate["id"])
+    assert refreshed["parameters"] == ["area"]
+    assert refreshed["rebound_at"] is None
+
+
+def test_axis_rebind_skips_boolean_and_other_plots(client, segmented_session):
+    """Boolean gates and gates on a different plot are unaffected by axis change."""
+    sid = segmented_session
+    plot_a = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "histogram",
+        "parameters": {"x_variable": "area", "num_bins": 20},
+    }).json()
+    plot_b = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "histogram",
+        "parameters": {"x_variable": "mean_intensity", "num_bins": 20},
+    }).json()
+    gate_a = client.post(f"/sessions/{sid}/analysis/plots/{plot_a['id']}/gates", json={
+        "gate_type": "interval", "definition": {"min": 0.0, "max": 10.0},
+        "parameters": ["area"],
+    }).json()
+    gate_b = client.post(f"/sessions/{sid}/analysis/plots/{plot_b['id']}/gates", json={
+        "gate_type": "interval", "definition": {"min": 0.0, "max": 10.0},
+        "parameters": ["mean_intensity"],
+    }).json()
+    boolean = client.post(f"/sessions/{sid}/analysis/boolean-gates", json={
+        "name": "A AND B", "operator": "AND",
+        "source_gate_ids": [gate_a["id"], gate_b["id"]],
+    }).json()
+
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot_a['id']}", json={
+        "parameters": {"x_variable": "solidity", "num_bins": 20},
+    })
+
+    gates = {g["id"]: g for g in client.get(f"/sessions/{sid}/analysis/gates").json()}
+    assert gates[gate_a["id"]]["parameters"] == ["solidity"]
+    assert gates[gate_a["id"]]["rebound_at"] is not None
+    assert gates[gate_b["id"]]["parameters"] == ["mean_intensity"]
+    assert gates[gate_b["id"]]["rebound_at"] is None
+    assert gates[boolean["id"]]["parameters"] == []
+    assert gates[boolean["id"]]["rebound_at"] is None
+
+
+def test_clear_rebound(client, segmented_session):
+    """update_gate with clear_rebound=True nulls rebound_at."""
+    sid = segmented_session
+    plot = client.post(f"/sessions/{sid}/analysis/plots", json={
+        "chart_type": "histogram",
+        "parameters": {"x_variable": "area", "num_bins": 20},
+    }).json()
+    gate = client.post(f"/sessions/{sid}/analysis/plots/{plot['id']}/gates", json={
+        "gate_type": "interval", "definition": {"min": 0.0, "max": 10.0},
+        "parameters": ["area"],
+    }).json()
+    client.patch(f"/sessions/{sid}/analysis/plots/{plot['id']}", json={
+        "parameters": {"x_variable": "mean_intensity", "num_bins": 20},
+    })
+
+    resp = client.patch(f"/sessions/{sid}/analysis/gates/{gate['id']}", json={
+        "clear_rebound": True,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["rebound_at"] is None
