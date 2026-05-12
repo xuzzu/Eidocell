@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 # Bumped on storage-layer breaking changes; see main.py wipe logic.
-STORAGE_VERSION = 6
+STORAGE_VERSION = 8
 
 # Root directory for all eidocell data
 EIDOCELL_HOME = Path(os.environ.get("EIDOCELL_HOME", Path.home() / ".eidocell"))

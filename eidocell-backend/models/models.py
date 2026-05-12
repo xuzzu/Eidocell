@@ -187,6 +187,7 @@ class Gate(Base):
     )
     operator: Mapped[str | None] = mapped_column(String, nullable=True)  # "AND" | "OR" for boolean gates
     source_gate_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)  # list of two gate IDs for boolean gates
+    rebound_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     plot: Mapped["Plot | None"] = relationship(
         back_populates="gates", foreign_keys=[plot_id]
