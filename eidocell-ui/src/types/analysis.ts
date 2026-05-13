@@ -62,6 +62,7 @@ export interface GateUpdate {
   color?: string
   definition?: Record<string, unknown>
   parent_gate_id?: string | null
+  clear_rebound?: boolean
 }
 
 export interface GateOut {
@@ -77,6 +78,7 @@ export interface GateOut {
   parent_gate_id?: string | null
   operator?: BooleanOperator | null
   source_gate_ids?: string[] | null
+  rebound_at?: string | null
 }
 
 export interface PopulationTreeNode extends GateOut {
