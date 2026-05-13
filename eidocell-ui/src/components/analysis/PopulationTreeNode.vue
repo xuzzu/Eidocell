@@ -25,11 +25,13 @@ const emit = defineEmits<{
   dragEnd: []
   reparent: [sourceId: string, newParentId: string | null]
   contextmenu: [id: string, name: string, e: MouseEvent]
+  clearRebound: [id: string]
 }>()
 
 const isRoot = computed(() => props.node.gate_type === 'root')
 const isBoolean = computed(() => props.node.gate_type === 'boolean')
 const isHierarchical = computed(() => !isRoot.value && !isBoolean.value)
+const isRebound = computed(() => Boolean(props.node.rebound_at))
 const hasChildren = computed(() => props.node.children.length > 0)
 const isExpanded = computed(() => props.expandedIds.has(props.node.id))
 const isBeingDragged = computed(() => props.draggingId === props.node.id)
@@ -174,6 +176,14 @@ const fullCount = computed(() => props.node.sample_count.toLocaleString())
           class="ml-1 px-1 text-[8px] font-bold tracking-widest rounded-[2px] bg-purple-100 text-purple-700"
         >{{ node.operator }}</span></span>
 
+      <!-- Rebound badge: axis change retargeted this gate's params. Click to dismiss. -->
+      <button
+        v-if="isRebound && isHierarchical"
+        class="ml-1 px-1 h-3.5 flex items-center text-[8px] font-bold tracking-widest rounded-[2px] bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors shrink-0"
+        title="Gate axes were rebound after a plot parameter change. Click to dismiss."
+        @click.stop="emit('clearRebound', node.id)"
+      >REBOUND</button>
+
       <!-- Count + % (compact) -->
       <div class="flex items-center gap-1 text-[9px] font-mono text-neutral/40 shrink-0 mr-0.5">
         <span>{{ countLabel }}</span>
@@ -213,6 +223,7 @@ const fullCount = computed(() => props.node.sample_count.toLocaleString())
           @drag-end="emit('dragEnd')"
           @reparent="(s, p) => emit('reparent', s, p)"
           @contextmenu="(id, name, e) => emit('contextmenu', id, name, e)"
+          @clear-rebound="(id) => emit('clearRebound', id)"
         />
       </div>
     </template>

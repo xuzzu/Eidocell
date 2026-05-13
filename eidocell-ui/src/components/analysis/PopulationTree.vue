@@ -33,6 +33,10 @@ async function onRename() {
   }
 }
 
+async function onClearRebound(gateId: string) {
+  await analysis.updateGate(gateId, { clear_rebound: true })
+}
+
 function onDeleteFromMenu() {
   const id = ctxMenu.value.gateId
   if (id) analysis.deleteGate(id)
@@ -160,6 +164,7 @@ async function onReparent(sourceId: string, newParentId: string | null) {
         @drag-end="onDragEnd"
         @reparent="onReparent"
         @contextmenu="onNodeContextmenu"
+        @clear-rebound="onClearRebound"
       />
 
       <!-- Boolean populations (flat list) -->
