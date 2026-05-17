@@ -1,7 +1,7 @@
 export type SourceKind = 'folder' | 'cif' | 'rif'
 export type TargetShapeStrategy =
   | 'none' | 'min' | 'max' | 'mean' | 'explicit' | 'per_image_square'
-export type NormalizeStrategy = 'none' | 'minmax' | 'zscore'
+export type NormalizeStrategy = 'none' | 'percentile' | 'bg_subtract'
 export type PaddingMethod = 'constant' | 'poisson' | 'replicate'
 export type PostResizeStrategy =
   | 'none' | 'explicit' | 'min_longest' | 'max_longest' | 'mean_longest'
@@ -21,6 +21,9 @@ export interface PreprocessingConfig {
   resize: boolean
   normalize: NormalizeStrategy
   normalize_per_channel: boolean
+  background_subtraction: boolean
+  background_subtraction_radius: number
+  background_subtraction_per_channel: boolean
   align_channels: boolean
   align_reference_index: number
   align_upsample_factor: number
@@ -74,8 +77,11 @@ export const DEFAULT_PREPROCESSING: PreprocessingConfig = {
   explicit_shape: null,
   padding_method: 'poisson',
   resize: false,
-  normalize: 'zscore',
+  normalize: 'percentile',
   normalize_per_channel: true,
+  background_subtraction: false,
+  background_subtraction_radius: 25,
+  background_subtraction_per_channel: true,
   align_channels: false,
   align_reference_index: 0,
   align_upsample_factor: 10,

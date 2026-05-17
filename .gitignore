@@ -13,6 +13,8 @@ STRATEGIC_VISION.md
 */.DS_Store
 */high-level-exec-plan.md
 */STRATEGIC_VISION.md
+.ruff_cache/
+docs/
 
 # Node / Vue (Frontend)
 node_modules/
@@ -27,6 +29,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 .eslintcache
+release
 
 # Python (Backend)
 __pycache__/

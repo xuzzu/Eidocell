@@ -17,8 +17,10 @@ DEFAULT_CHANNEL_SET = "default"
 DEFAULT_VERSION = 1
 
 
-def _ensure_table(session_id: str, dim: int):
-    return lance_store.features_table(session_id, dim=dim, create_if_missing=True)
+def _ensure_table(session_id: str, method: str, dim: int):
+    return lance_store.features_table(
+        session_id, method, dim=dim, create_if_missing=True
+    )
 
 
 def upsert_features(
@@ -59,11 +61,11 @@ def upsert_features(
             }
         )
 
-    table = _ensure_table(session_id, dim)
+    table = _ensure_table(session_id, method, dim)
     arrow_data = pa.Table.from_pylist(payload, schema=lance_store.features_schema(dim))
 
     def _do_write():
-        table.merge_insert(["sample_id", "method", "channel_set"]) \
+        table.merge_insert(["sample_id", "channel_set"]) \
             .when_matched_update_all() \
             .when_not_matched_insert_all() \
             .execute(arrow_data)
@@ -84,15 +86,17 @@ def has_method(
     if not sample_ids:
         return set()
     try:
-        table = lance_store.features_table(session_id, create_if_missing=False)
+        table = lance_store.features_table(session_id, method, create_if_missing=False)
     except FileNotFoundError:
         return set()
     ids_literal = ",".join(f"'{sid}'" for sid in sample_ids)
     where = (
-        f"method = '{method}' AND channel_set = '{channel_set}' "
+        f"channel_set = '{channel_set}' "
         f"AND sample_id IN ({ids_literal})"
     )
-    arrow = table.search().where(where).select(["sample_id"]).to_arrow()
+    arrow = lance_store.with_retry(
+        lambda: table.search().where(where).select(["sample_id"]).to_arrow()
+    )
     if arrow.num_rows == 0:
         return set()
     return set(arrow.column("sample_id").to_pylist())
@@ -113,21 +117,23 @@ def load_vectors(
     if not sample_ids:
         return [], np.zeros((0, 0), dtype=np.float32)
     try:
-        table = lance_store.features_table(session_id, create_if_missing=False)
+        table = lance_store.features_table(session_id, method, create_if_missing=False)
     except FileNotFoundError:
         return [], np.zeros((0, 0), dtype=np.float32)
 
     ids_literal = ",".join(f"'{sid}'" for sid in sample_ids)
     where = (
-        f"method = '{method}' AND channel_set = '{channel_set}' "
+        f"channel_set = '{channel_set}' "
         f"AND sample_id IN ({ids_literal})"
     )
-    arrow = (
-        table.search()
-        .where(where)
-        .select(["sample_id", "vector"])
-        .limit(len(sample_ids))
-        .to_arrow()
+    arrow = lance_store.with_retry(
+        lambda: (
+            table.search()
+            .where(where)
+            .select(["sample_id", "vector"])
+            .limit(len(sample_ids))
+            .to_arrow()
+        )
     )
     if arrow.num_rows == 0:
         return [], np.zeros((0, 0), dtype=np.float32)
@@ -157,11 +163,13 @@ def load_all_vectors(
 ) -> tuple[list[str], np.ndarray]:
     """Return (sample_ids, vectors_2d) for every row of (method, channel_set)."""
     try:
-        table = lance_store.features_table(session_id, create_if_missing=False)
+        table = lance_store.features_table(session_id, method, create_if_missing=False)
     except FileNotFoundError:
         return [], np.zeros((0, 0), dtype=np.float32)
-    where = f"method = '{method}' AND channel_set = '{channel_set}'"
-    arrow = table.search().where(where).select(["sample_id", "vector"]).to_arrow()
+    where = f"channel_set = '{channel_set}'"
+    arrow = lance_store.with_retry(
+        lambda: table.search().where(where).select(["sample_id", "vector"]).to_arrow()
+    )
     if arrow.num_rows == 0:
         return [], np.zeros((0, 0), dtype=np.float32)
     sids = arrow.column("sample_id").to_pylist()
@@ -184,12 +192,12 @@ def cosine_search(
     `k` is the result limit; None returns the full candidate set.
     """
     try:
-        table = lance_store.features_table(session_id, create_if_missing=False)
+        table = lance_store.features_table(session_id, method, create_if_missing=False)
     except FileNotFoundError:
         return []
 
     query = np.asarray(query_vector, dtype=np.float32).ravel()
-    where_clauses = [f"method = '{method}'", f"channel_set = '{channel_set}'"]
+    where_clauses = [f"channel_set = '{channel_set}'"]
     if candidate_sample_ids is not None:
         cand_list = list(candidate_sample_ids)
         if not cand_list:
@@ -206,7 +214,7 @@ def cosine_search(
     )
     if k is not None:
         builder = builder.limit(int(k))
-    arrow = builder.to_arrow()
+    arrow = lance_store.with_retry(lambda: builder.to_arrow())
     if arrow.num_rows == 0:
         return []
 

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useSessionStore } from './session'
 import * as segApi from '@/api/segmentation'
+import { emitDataEvent } from '@/lib/dataBus'
 import type { SegmentationMethod } from '@/types'
 
 export const useSegmentationStore = defineStore('segmentation', () => {
@@ -71,6 +72,9 @@ export const useSegmentationStore = defineStore('segmentation', () => {
   function onTaskComplete() {
     loading.value = false
     taskId.value = null
+    // Masks were generated for samples — notify other windows so gallery /
+    // analysis views refresh thumbnails and aggregates.
+    emitDataEvent(['masks', 'samples'])
   }
 
   return {

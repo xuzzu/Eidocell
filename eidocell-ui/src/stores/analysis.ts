@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
 import { useGalleryStore } from './gallery'
 import * as analysisApi from '@/api/analysis'
+import { emitDataEvent, onDataEvent } from '@/lib/dataBus'
 import type {
   PlotOut, PlotData, GateOut,
   PlotCreate, PlotUpdate, GateCreate, GateUpdate, BooleanGateCreate,
@@ -103,6 +104,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     await fetchPlots()
     addPlotToWorkspace(plot.id)
     selectedPlotId.value = plot.id
+    emitDataEvent(['plots'])
     return plot
   }
 
@@ -140,6 +142,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     if (idx >= 0) plots.value[idx] = updated
     // Re-fetch the plot data so renderer picks up new params/axes/scales.
     await fetchPlotData(plotId)
+    emitDataEvent(['plots'])
     return updated
   }
 
@@ -151,6 +154,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     await fetchPlots()
     await refreshGatingState()
     galleryStore.fetchSamples()
+    emitDataEvent(['plots', 'gates', 'samples'])
   }
 
   async function createGate(plotId: string, data: GateCreate) {
@@ -158,12 +162,14 @@ export const useAnalysisStore = defineStore('analysis', () => {
     await analysisApi.createGate(sessionStore.currentSessionId, plotId, data)
     await refreshGatingState()
     await refreshWorkspace()
+    emitDataEvent(['gates', 'samples'])
   }
 
   async function createBooleanGate(data: BooleanGateCreate) {
     if (!sessionStore.currentSessionId) return
     await analysisApi.createBooleanGate(sessionStore.currentSessionId, data)
     await refreshGatingState()
+    emitDataEvent(['gates'])
   }
 
   async function updateGate(gateId: string, data: GateUpdate) {
@@ -174,6 +180,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     // a gate's definition or parent changes.
     await refreshWorkspace()
     galleryStore.fetchSamples()
+    emitDataEvent(['gates', 'samples'])
   }
 
   async function deleteGate(gateId: string) {
@@ -182,6 +189,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     await refreshGatingState()
     await refreshWorkspace()
     galleryStore.fetchSamples()
+    emitDataEvent(['gates', 'samples'])
   }
 
   async function selectPopulation(gateId: string | null) {
@@ -193,6 +201,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
       fetchPopulationTree(),
     ])
     galleryStore.fetchSamples()
+    emitDataEvent(['gates', 'samples'])
   }
 
   async function resetAllGates() {
@@ -204,6 +213,13 @@ export const useAnalysisStore = defineStore('analysis', () => {
       await fetchPlotData(layout.i)
     }
   }
+
+  // Remote refresh: plots/gates/samples mutated in another window.
+  onDataEvent(['plots', 'gates', 'samples'], async () => {
+    if (!sessionStore.currentSessionId) return
+    await Promise.all([fetchPlots(), refreshGatingState()])
+    await refreshWorkspace()
+  })
 
   return {
     parameters, plots, selectedPlotId,

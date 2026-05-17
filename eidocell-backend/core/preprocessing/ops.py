@@ -2,11 +2,12 @@
 
 Every op returns ``(output_array, metadata_dict)`` so the pipeline can record
 what was done. Operations preserve multi-channel layout (HWC) when present,
-operating per-channel where that's the IFC norm (z-score, background sub).
+operating per-channel where that's the IFC norm (intensity normalisation,
+background subtraction).
 
 Most heavy lifting reuses code patterns from the user's ``ifc-data-eval``
-prototype: padding (constant/poisson/replicate), z-score, phase-correlation
-alignment, rolling-ball background subtraction.
+prototype: padding (constant/poisson/replicate), phase-correlation alignment,
+top-hat background subtraction.
 """
 from __future__ import annotations
 
@@ -34,43 +35,123 @@ def _restore(arr: np.ndarray, was_2d: bool) -> np.ndarray:
 
 
 # ── Normalisation ──────────────────────────────────────────────────────
+#
+# These two replace the older minmax/zscore methods, which over-equalised
+# fluorescent-channel contrast (zscore divides by σ ≈ bright-spot magnitude,
+# squashing bright cells toward dim ones — visible in IFC datasets where a few
+# bright pixels per crop dominate the std). The percentile-based methods below
+# remove the per-image background drift without distorting the biological
+# intensity ordering. See ``/tmp/bgnorm_eval/FINDINGS.md`` for the numerical
+# comparison on FSDFF.
 
 
-def normalize_minmax(arr: np.ndarray, *, per_channel: bool = True) -> tuple[np.ndarray, dict]:
+def _valid_pixels(ch: np.ndarray, valid: np.ndarray | None) -> np.ndarray:
+    """Return the 1-D view of pixels included in statistics. ``valid`` is an
+    optional HW uint8/bool mask (1 = real, 0 = padded margin)."""
+    if valid is None:
+        return ch.ravel()
+    sel = ch[valid.astype(bool)]
+    if sel.size == 0:
+        return ch.ravel()
+    return sel
+
+
+def normalize_percentile(
+    arr: np.ndarray,
+    *,
+    low: float = 1.0,
+    high: float = 99.0,
+    per_channel: bool = True,
+    valid: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Clip to ``[p_low, p_high]`` per channel and rescale to ``[0, 1]``.
+
+    Safe default for both brightfield and fluorescent channels: removes per-image
+    background drift via the low-percentile floor and bounds the upper end so
+    rare bright pixels don't squash the rest of the image. With per_channel=True
+    each channel is scaled independently (required for IFC where channel
+    intensity scales differ by orders of magnitude).
+
+    ``valid`` (optional) is a 2-D mask of real-data pixels. Padded-margin
+    pixels are excluded from the percentile computation when provided.
+    """
     img, was_2d = _ensure_hwc(arr)
     out = np.empty_like(img, dtype=np.float32)
     stats: list[dict] = []
     if per_channel:
         for c in range(img.shape[2]):
             ch = img[:, :, c].astype(np.float32, copy=False)
-            mn, mx = float(ch.min()), float(ch.max())
-            if mx > mn:
-                out[:, :, c] = (ch - mn) / (mx - mn)
+            sample = _valid_pixels(ch, valid)
+            lo, hi = np.percentile(sample, [low, high])
+            lo = float(lo); hi = float(hi)
+            if hi > lo:
+                out[:, :, c] = np.clip((ch - lo) / (hi - lo), 0.0, 1.0)
             else:
                 out[:, :, c] = 0.0
-            stats.append({"channel": c, "min": mn, "max": mx})
+            stats.append({"channel": c, "p_low": lo, "p_high": hi})
     else:
-        mn, mx = float(img.min()), float(img.max())
-        out = ((img.astype(np.float32) - mn) / (mx - mn)) if mx > mn else np.zeros_like(img, dtype=np.float32)
-        stats.append({"channel": None, "min": mn, "max": mx})
-    return _restore(out, was_2d), {"per_channel": per_channel, "stats": stats}
+        ch = img.astype(np.float32, copy=False)
+        sample = _valid_pixels(ch, valid)
+        lo, hi = np.percentile(sample, [low, high])
+        lo = float(lo); hi = float(hi)
+        if hi > lo:
+            out = np.clip((ch - lo) / (hi - lo), 0.0, 1.0)
+        else:
+            out = np.zeros_like(ch)
+        stats.append({"channel": None, "p_low": lo, "p_high": hi})
+    return _restore(out, was_2d), {
+        "per_channel": per_channel, "low": low, "high": high, "stats": stats,
+    }
 
 
-def normalize_zscore(arr: np.ndarray, *, per_channel: bool = True) -> tuple[np.ndarray, dict]:
+def normalize_bg_subtract(
+    arr: np.ndarray,
+    *,
+    bg_percentile: float = 10.0,
+    high_percentile: float = 99.0,
+    per_channel: bool = True,
+    valid: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Subtract a per-image background floor (``bg_percentile``) and rescale by
+    the contrast span (``high_percentile - bg_percentile``).
+
+    Output ≥ 0; the upper end is *not* clipped (legitimate bright signal can
+    exceed 1.0). Preserves the natural intensity ordering between cells better
+    than ``normalize_percentile``, at the cost of less hard contrast clipping.
+
+    ``valid`` (optional) is a 2-D mask of real-data pixels. Padded-margin
+    pixels are excluded from the percentile computation when provided.
+    """
     img, was_2d = _ensure_hwc(arr)
     out = np.empty_like(img, dtype=np.float32)
     stats: list[dict] = []
     if per_channel:
         for c in range(img.shape[2]):
             ch = img[:, :, c].astype(np.float32, copy=False)
-            mean, std = float(ch.mean()), float(ch.std())
-            out[:, :, c] = (ch - mean) / std if std > 0 else 0.0
-            stats.append({"channel": c, "mean": mean, "std": std})
+            sample = _valid_pixels(ch, valid)
+            bg, hi = np.percentile(sample, [bg_percentile, high_percentile])
+            bg = float(bg); hi = float(hi)
+            span = hi - bg
+            if span > 0:
+                out[:, :, c] = np.clip((ch - bg) / span, 0.0, None)
+            else:
+                out[:, :, c] = 0.0
+            stats.append({"channel": c, "bg": bg, "high": hi})
     else:
-        mean, std = float(img.mean()), float(img.std())
-        out = (img.astype(np.float32) - mean) / std if std > 0 else np.zeros_like(img, dtype=np.float32)
-        stats.append({"channel": None, "mean": mean, "std": std})
-    return _restore(out, was_2d), {"per_channel": per_channel, "stats": stats}
+        ch = img.astype(np.float32, copy=False)
+        sample = _valid_pixels(ch, valid)
+        bg, hi = np.percentile(sample, [bg_percentile, high_percentile])
+        bg = float(bg); hi = float(hi)
+        span = hi - bg
+        if span > 0:
+            out = np.clip((ch - bg) / span, 0.0, None)
+        else:
+            out = np.zeros_like(ch)
+        stats.append({"channel": None, "bg": bg, "high": hi})
+    return _restore(out, was_2d), {
+        "per_channel": per_channel, "bg_percentile": bg_percentile,
+        "high_percentile": high_percentile, "stats": stats,
+    }
 
 
 # ── Padding / resizing ─────────────────────────────────────────────────
@@ -253,13 +334,31 @@ def compensate(
 # ── Background Subtraction ───────────────────────────────────────────
 
 
-def background_subtraction(arr: np.ndarray, *, radius: int = 50, per_channel: bool = True) -> tuple[np.ndarray, dict]:
-    """White top-hat background subtraction via morphological opening.
+def background_subtraction(
+    arr: np.ndarray,
+    *,
+    radius: int = 25,
+    per_channel: bool = True,
+    high_percentile: float = 99.0,
+    valid: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict]:
+    """White top-hat background subtraction, normalised by the residual's p99.
 
-    Equivalent to the white top-hat: ``out = img - opening(img)``. We use
-    ``cv2.morphologyEx`` with an elliptical SE of diameter ``2*radius + 1`` —
-    same semantics as skimage's rolling_ball (subtracting a smooth low-frequency
-    background floor), but ~15× faster.
+    1. White top-hat: ``residual = img - morphological_opening(img)`` with an
+       elliptical structuring element of diameter ``2*radius + 1``. This removes
+       any slow-varying bg up to the SE size — same shape semantics as
+       skimage's rolling-ball, ~15× faster via ``cv2.morphologyEx``.
+    2. Divide the residual by its ``high_percentile`` over valid pixels (per
+       channel when ``per_channel=True``). Without this rescale the output is
+       in raw intensity units, so the bg-level variance across images is not
+       actually normalised — the op only removes the slow bg shape.
+
+    ``valid`` (optional) is a 2-D HW mask of real-data pixels; padded-margin
+    pixels are excluded from the residual's percentile estimate when provided.
+
+    The default ``radius=25`` matches a typical IFC cell diameter on 80–100 px
+    crops — larger radii (e.g. 50) approach the image size and degenerate to
+    "subtract image mean", which doesn't remove the cell structure at all.
     """
     img, was_2d = _ensure_hwc(arr)
     ksize = max(3, int(radius) * 2 + 1)
@@ -267,15 +366,28 @@ def background_subtraction(arr: np.ndarray, *, radius: int = 50, per_channel: bo
         ksize += 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
     out = np.empty_like(img, dtype=np.float32)
+    stats: list[dict] = []
     for c in range(img.shape[2]):
         ch = img[:, :, c].astype(np.float32, copy=False)
-        out[:, :, c] = cv2.morphologyEx(ch, cv2.MORPH_TOPHAT, kernel)
-    np.clip(out, 0, None, out=out)
-    return _restore(out, was_2d), {"radius": radius, "per_channel": per_channel, "method": "tophat"}
+        residual = cv2.morphologyEx(ch, cv2.MORPH_TOPHAT, kernel)
+        sample = _valid_pixels(residual, valid)
+        hi = float(np.percentile(sample, high_percentile))
+        if hi > 0:
+            out[:, :, c] = np.clip(residual / hi, 0.0, None)
+        else:
+            out[:, :, c] = 0.0
+        stats.append({"channel": c, "high": hi})
+    return _restore(out, was_2d), {
+        "radius": radius,
+        "per_channel": per_channel,
+        "method": "tophat",
+        "high_percentile": high_percentile,
+        "stats": stats,
+    }
 
 __all__ = [
-    "normalize_minmax",
-    "normalize_zscore",
+    "normalize_percentile",
+    "normalize_bg_subtract",
     "pad_to",
     "pad_to_square",
     "resize_to",

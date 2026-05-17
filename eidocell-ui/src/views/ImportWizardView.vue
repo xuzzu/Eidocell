@@ -482,8 +482,8 @@ onUnmounted(stopPolling)
             <label class="label pb-1"><span class="label-text font-bold text-[10px] tracking-widest uppercase text-neutral/70">Normalisation</span></label>
             <select v-model="preproc.normalize" class="select select-bordered rounded-[2px] w-full font-mono text-sm">
               <option value="none">None</option>
-              <option value="zscore">Z-score (recommended)</option>
-              <option value="minmax">Min-max [0,1]</option>
+              <option value="percentile">Percentile clip [p1,p99] → [0,1] (recommended)</option>
+              <option value="bg_subtract">Background-floor subtract (p10) + p99 rescale</option>
             </select>
           </div>
           
@@ -491,10 +491,11 @@ onUnmounted(stopPolling)
           <div>
             <label class="flex items-center gap-3 text-sm cursor-pointer">
               <input type="checkbox" v-model="preproc.background_subtraction" class="checkbox checkbox-sm rounded-[2px]" />
-              <span class="font-bold text-[11px] tracking-widest uppercase">Rolling Ball Background Subtraction</span>
+              <span class="font-bold text-[11px] tracking-widest uppercase">Top-Hat Background Subtraction</span>
             </label>
             <p v-if="preproc.background_subtraction" class="text-[11px] font-mono text-neutral/60 mt-1">
               Radius: <input type="number" min="1" v-model.number="preproc.background_subtraction_radius" class="input input-xs input-bordered rounded-[2px] w-16 font-mono ml-1" />
+              <span class="ml-2 text-neutral/50">px (≈ cell diameter; residual is rescaled by its p99)</span>
             </p>
           </div>
 

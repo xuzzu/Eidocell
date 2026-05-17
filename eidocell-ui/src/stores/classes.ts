@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useSessionStore } from './session'
 import * as classesApi from '@/api/classes'
 import * as galleryApi from '@/api/gallery'
+import { emitDataEvent, onDataEvent } from '@/lib/dataBus'
 import type { ClassOut, SamplePage, ClassCreate } from '@/types'
 
 export const useClassesStore = defineStore('classes', () => {
@@ -29,6 +30,7 @@ export const useClassesStore = defineStore('classes', () => {
     if (!sessionStore.currentSessionId) return
     await galleryApi.createClass(sessionStore.currentSessionId, data)
     await fetchClasses()
+    emitDataEvent(['classes'])
   }
 
   async function deleteClass(classId: string) {
@@ -39,6 +41,7 @@ export const useClassesStore = defineStore('classes', () => {
       classSamples.value = null
     }
     await fetchClasses()
+    emitDataEvent(['classes', 'samples'])
   }
 
   async function selectClass(classId: string) {
@@ -57,6 +60,15 @@ export const useClassesStore = defineStore('classes', () => {
     if (!sessionStore.currentSessionId) return null
     return classesApi.getClassSummary(sessionStore.currentSessionId, classId)
   }
+
+  // Remote refresh: another window mutated classes or sample/class membership.
+  onDataEvent(['classes', 'samples'], async () => {
+    if (!sessionStore.currentSessionId) return
+    await fetchClasses()
+    if (selectedClassId.value) {
+      await fetchClassSamples(selectedClassId.value)
+    }
+  })
 
   return {
     classes, selectedClassId, classSamples, loading,

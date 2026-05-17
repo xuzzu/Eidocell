@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useSessionStore } from './session'
 import * as clustersApi from '@/api/clusters'
 import * as featuresApi from '@/api/features'
+import { emitDataEvent, onDataEvent } from '@/lib/dataBus'
 import type {
   ClusterOut, ClusterEmbeddingPoint, ClusteringScope, ClusterSortMode,
   FeatureExtractionMethod, SamplePage,
@@ -163,6 +164,7 @@ export const useClustersStore = defineStore('clusters', () => {
       _markRecentlyAdded(newIds)
     }
     taskId.value = null
+    emitDataEvent(['clusters'])
   }
 
   function onPipelineFailed() {
@@ -183,6 +185,7 @@ export const useClustersStore = defineStore('clusters', () => {
     selectedClusterIds.value.delete(result.deleted_cluster_id)
     _markRecentlyRemoved([result.deleted_cluster_id])
     _markRecentlyAdded(result.new_clusters.map(c => c.id))
+    emitDataEvent(['clusters'])
   }
 
   async function mergeClusters(clusterIds: string[]) {
@@ -198,6 +201,7 @@ export const useClustersStore = defineStore('clusters', () => {
     selectedClusterIds.value.clear()
     _markRecentlyRemoved(result.deleted_cluster_ids)
     _markRecentlyAdded([result.new_cluster.id])
+    emitDataEvent(['clusters'])
   }
 
   async function assignToClass(clusterIds: string[], classId: string) {
@@ -208,6 +212,7 @@ export const useClustersStore = defineStore('clusters', () => {
     })
     selectedClusterIds.value.clear()
     await fetchClusters()
+    emitDataEvent(['samples', 'classes', 'clusters'])
   }
 
   async function deleteCluster(clusterId: string) {
@@ -216,6 +221,7 @@ export const useClustersStore = defineStore('clusters', () => {
     selectedClusterIds.value.delete(clusterId)
     clusters.value = clusters.value.filter(c => c.id !== clusterId)
     _markRecentlyRemoved([clusterId])
+    emitDataEvent(['clusters'])
   }
 
   async function clearAll() {
@@ -224,6 +230,7 @@ export const useClustersStore = defineStore('clusters', () => {
     clusters.value = []
     embeddings.value = []
     selectedClusterIds.value.clear()
+    emitDataEvent(['clusters'])
   }
 
   function toggleSelection(id: string) {
@@ -277,6 +284,23 @@ export const useClustersStore = defineStore('clusters', () => {
       dimReductionParams.value = {}
     }
   }
+
+  // Remote refresh: clusters changed in another window.
+  onDataEvent(['clusters'], async () => {
+    if (!sessionStore.currentSessionId) return
+    await fetchClusters()
+    if (selectedPreviewClusterId.value) {
+      try {
+        clusterSamples.value = await clustersApi.getClusterSamples(
+          sessionStore.currentSessionId, selectedPreviewClusterId.value, 0, 100,
+        )
+      } catch {
+        // cluster may have been deleted remotely
+        selectedPreviewClusterId.value = null
+        clusterSamples.value = null
+      }
+    }
+  })
 
   return {
     clusters, sortedClusters, embeddings, loading, selectedClusterIds,

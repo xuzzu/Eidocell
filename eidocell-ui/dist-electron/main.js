@@ -1,7 +1,7 @@
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, screen } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -79,27 +79,101 @@ const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
 const MAIN_DIST = path.join(process.env.APP_ROOT, "dist-electron");
 const RENDERER_DIST = path.join(process.env.APP_ROOT, "dist");
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
+const TABS = ["gallery", "classes", "clusters", "segmentation", "analysis"];
+const TAB_TITLES = {
+  gallery: "Gallery",
+  classes: "Classes",
+  clusters: "Clusters",
+  segmentation: "Segmentation",
+  analysis: "Analysis"
+};
+const windows = /* @__PURE__ */ new Map();
+const popouts = /* @__PURE__ */ new Map();
+const snapshots = /* @__PURE__ */ new Map();
+let mainWindow = null;
+function registerWindow(win, role, tabId) {
+  const wcId = win.webContents.id;
+  windows.set(wcId, { window: win, role, tabId });
+  win.on("closed", () => {
+    windows.delete(wcId);
+    if (role === "main") {
+      mainWindow = null;
+    } else if (tabId) {
+      popouts.delete(tabId);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("popout:closed", tabId);
+      }
+    }
+  });
+}
+function broadcastSync(senderId, storeId, state) {
+  snapshots.set(storeId, state);
+  for (const entry of windows.values()) {
+    if (entry.window.webContents.id === senderId) continue;
+    if (entry.window.isDestroyed()) continue;
+    entry.window.webContents.send("sync:apply", storeId, state);
+  }
+}
+function rendererUrl(hash) {
+  if (VITE_DEV_SERVER_URL) {
+    return `${VITE_DEV_SERVER_URL}#${hash}`;
+  }
+  const indexPath = path.join(RENDERER_DIST, "index.html");
+  return `file://${indexPath}#${hash}`;
+}
 function createWindow() {
-  win = new BrowserWindow({
+  const win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+    width: 1440,
+    height: 900,
     webPreferences: {
       preload: path.join(__dirname$1, "preload.mjs")
     }
   });
   win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+    win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
   });
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL);
   } else {
     win.loadFile(path.join(RENDERER_DIST, "index.html"));
   }
+  mainWindow = win;
+  registerWindow(win, "main");
+}
+function createPopoutWindow(tabId, cursorX, cursorY) {
+  var _a;
+  if (popouts.has(tabId)) {
+    (_a = popouts.get(tabId)) == null ? void 0 : _a.focus();
+    return;
+  }
+  const display = screen.getDisplayNearestPoint({ x: cursorX, y: cursorY });
+  const width = 1280;
+  const height = 800;
+  const offset = 40;
+  let x = Math.round(cursorX - offset);
+  let y = Math.round(cursorY - offset);
+  x = Math.max(display.workArea.x, Math.min(x, display.workArea.x + display.workArea.width - width));
+  y = Math.max(display.workArea.y, Math.min(y, display.workArea.y + display.workArea.height - height));
+  const win = new BrowserWindow({
+    icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+    width,
+    height,
+    x,
+    y,
+    title: `EidoCell — ${TAB_TITLES[tabId]}`,
+    webPreferences: {
+      preload: path.join(__dirname$1, "preload.mjs")
+    }
+  });
+  win.loadURL(rendererUrl(`/popout/${tabId}`));
+  popouts.set(tabId, win);
+  registerWindow(win, "popout", tabId);
+  mainWindow == null ? void 0 : mainWindow.webContents.send("popout:opened", tabId);
 }
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
-    win = null;
   }
 });
 app.on("activate", () => {
@@ -119,6 +193,40 @@ ipcMain.handle("select-file", async (_event, options) => {
     filters
   });
   return result.filePaths[0] ?? null;
+});
+ipcMain.handle("popout:open", (_event, tabId, x, y) => {
+  var _a;
+  if (!TABS.includes(tabId)) return { ok: false, reason: "invalid-tab" };
+  if (popouts.has(tabId)) {
+    (_a = popouts.get(tabId)) == null ? void 0 : _a.focus();
+    return { ok: false, reason: "already-open" };
+  }
+  if (popouts.size + 1 >= TABS.length) {
+    return { ok: false, reason: "min-one-tab" };
+  }
+  createPopoutWindow(tabId, x, y);
+  return { ok: true };
+});
+ipcMain.handle("popout:focus", (_event, tabId) => {
+  const win = popouts.get(tabId);
+  if (!win) return false;
+  if (win.isMinimized()) win.restore();
+  win.focus();
+  return true;
+});
+ipcMain.handle("popout:list", () => [...popouts.keys()]);
+ipcMain.on("sync:broadcast", (event, storeId, state) => {
+  broadcastSync(event.sender.id, storeId, state);
+});
+ipcMain.handle("sync:snapshot", (_event, storeId) => {
+  return snapshots.get(storeId) ?? null;
+});
+ipcMain.on("data:emit", (event, topics) => {
+  for (const entry of windows.values()) {
+    if (entry.window.webContents.id === event.sender.id) continue;
+    if (entry.window.isDestroyed()) continue;
+    entry.window.webContents.send("data:apply", topics);
+  }
 });
 app.whenReady().then(() => {
   pythonManager.start();

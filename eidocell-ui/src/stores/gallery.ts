@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { useSessionStore } from './session'
 import * as galleryApi from '@/api/gallery'
+import { emitDataEvent, onDataEvent } from '@/lib/dataBus'
 import type { SampleOut, FilterCondition, ClassOut, ClassCreate, SortableAttribute } from '@/types'
 
 export type ChannelDisplayMode = 'single' | 'multi'
@@ -220,6 +221,7 @@ export const useGalleryStore = defineStore('gallery', () => {
   async function createClass(data: ClassCreate) {
     const cls = await galleryApi.createClass(sid.value, data)
     await fetchClasses()
+    emitDataEvent(['classes'])
     return cls
   }
 
@@ -227,6 +229,7 @@ export const useGalleryStore = defineStore('gallery', () => {
     await galleryApi.deleteClass(sid.value, classId)
     await fetchClasses()
     await fetchSamples()
+    emitDataEvent(['classes', 'samples'])
   }
 
   async function assignSelectedToClass(classId: string | null) {
@@ -238,6 +241,7 @@ export const useGalleryStore = defineStore('gallery', () => {
     selectedIds.value.clear()
     await fetchSamples()
     await fetchClasses()
+    emitDataEvent(['samples', 'classes'])
   }
 
   function toggleSelection(id: string) {
@@ -268,6 +272,12 @@ export const useGalleryStore = defineStore('gallery', () => {
     offset.value = 0
     fetchSamples()
   }
+
+  // Remote refresh: another window mutated samples / classes / masks / gates.
+  onDataEvent(['samples', 'classes', 'masks', 'gates'], async () => {
+    if (!sessionStore.currentSessionId) return
+    await Promise.all([fetchSamples(), fetchClasses()])
+  })
 
   return {
     samples, total, offset, limit, sortBy, sortOrder, filters,

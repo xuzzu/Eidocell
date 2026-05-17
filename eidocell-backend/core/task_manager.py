@@ -112,7 +112,10 @@ class TaskManager:
         except Exception as e:
             task.error = str(e)
             task.status = TaskStatus.FAILED
-            logger.error("Task failed: %s [%s]: %s", task.name, task_id, e)
+            # logger.exception attaches the full traceback (and any chained
+            # cause from native Rust panics surfaced through Lance/DataFusion),
+            # which `logger.error("...: %s", e)` would otherwise truncate.
+            logger.exception("Task failed: %s [%s]", task.name, task_id)
             from core.notifications import notification_manager
             notification_manager.broadcast("Task Failed", f"Failed to run {task.name}: {e}", level="error")
         finally:

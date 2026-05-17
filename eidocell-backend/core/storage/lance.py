@@ -33,8 +33,12 @@ def connect() -> "lancedb.DBConnection":
     return lancedb.connect(str(LANCE_DIR))
 
 
-def features_table_name(session_id: str) -> str:
-    return f"{FEATURES_PREFIX}{session_id}"
+def features_table_name(session_id: str, method: str) -> str:
+    return f"{FEATURES_PREFIX}{session_id}_{method}"
+
+
+def features_table_prefix(session_id: str) -> str:
+    return f"{FEATURES_PREFIX}{session_id}_"
 
 
 def mask_attrs_table_name(session_id: str) -> str:
@@ -69,17 +73,20 @@ def features_schema(dim: int) -> pa.Schema:
 
 def features_table(
     session_id: str,
+    method: str,
     *,
     dim: int | None = None,
     create_if_missing: bool = False,
 ):
-    """Return the features table for a session.
+    """Return the features table for (session, method).
 
-    `dim` is required when creating; ignored when opening. Raises if the table
-    does not exist and `create_if_missing` is False.
+    Each method gets its own table so vectors of different dimensions can
+    coexist on the same session (the `vector` column is a `fixed_size_list[dim]`,
+    so one table can only hold one dim). `dim` is required when creating;
+    ignored when opening.
     """
     db = connect()
-    name = features_table_name(session_id)
+    name = features_table_name(session_id, method)
     try:
         return db.open_table(name)
     except (FileNotFoundError, ValueError):
@@ -91,7 +98,6 @@ def features_table(
     try:
         return db.create_table(name, schema=features_schema(dim))
     except (ValueError, OSError):
-        # Lost a race with another writer — re-open.
         return db.open_table(name)
 
 
@@ -159,7 +165,6 @@ def drop_session_tables(session_id: str) -> None:
     """
     db = connect()
     fixed = (
-        features_table_name(session_id),
         mask_attrs_table_name(session_id),
         images_table_name(session_id),
         sample_attrs_table_name(session_id),
@@ -171,18 +176,19 @@ def drop_session_tables(session_id: str) -> None:
             continue
         except Exception:
             logger.exception("failed to drop lance table %s", name)
-    # Sweep any staging tables for this session.
+    # Sweep per-method features tables and any staging tables for this session.
+    features_prefix = features_table_prefix(session_id)
     staging_prefix = f"{IMPORT_STAGING_PREFIX}{session_id}_"
     try:
         names = list(db.table_names())
     except Exception:
         names = []
     for name in names:
-        if name.startswith(staging_prefix):
+        if name.startswith(features_prefix) or name.startswith(staging_prefix):
             try:
                 db.drop_table(name)
             except Exception:
-                logger.exception("failed to drop staging table %s", name)
+                logger.exception("failed to drop lance table %s", name)
 
 
 def with_retry(fn, *, attempts: int = 3, backoff: float = 0.05):

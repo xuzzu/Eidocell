@@ -8,29 +8,89 @@ import pytest
 from core.preprocessing import ops, build_pipeline
 
 
-def test_zscore_grayscale_unit_variance():
-    img = (np.random.randn(64, 64) * 5 + 100).astype(np.float32)
-    out, meta = ops.normalize_zscore(img, per_channel=True)
-    assert abs(float(out.mean())) < 1e-3
-    assert abs(float(out.std()) - 1.0) < 1e-2
-    assert meta["per_channel"] is True
-
-
-def test_zscore_per_channel():
-    img = np.zeros((10, 10, 2), dtype=np.float32)
-    img[..., 0] = np.random.randn(10, 10) * 2 + 5
-    img[..., 1] = np.random.randn(10, 10) * 7 + 50
-    out, _ = ops.normalize_zscore(img, per_channel=True)
-    assert abs(float(out[..., 0].std()) - 1.0) < 0.05
-    assert abs(float(out[..., 1].std()) - 1.0) < 0.05
-
-
-def test_minmax_clamps_to_unit_range():
-    img = np.array([[0.0, 50.0], [100.0, 200.0]], dtype=np.float32)
-    out, meta = ops.normalize_minmax(img, per_channel=False)
-    assert float(out.min()) == 0.0
+def test_percentile_clip_and_rescale():
+    img = np.arange(100, dtype=np.float32).reshape(10, 10)  # 0..99
+    out, meta = ops.normalize_percentile(img, low=1.0, high=99.0, per_channel=False)
+    # Values below p1 / above p99 saturate; range is [0, 1].
+    assert float(out.min()) == pytest.approx(0.0)
     assert float(out.max()) == pytest.approx(1.0)
-    assert meta["stats"][0]["min"] == 0.0
+    assert meta["stats"][0]["p_low"] == pytest.approx(np.percentile(img, 1))
+    assert meta["stats"][0]["p_high"] == pytest.approx(np.percentile(img, 99))
+
+
+def test_percentile_per_channel_independent_scales():
+    img = np.zeros((10, 10, 2), dtype=np.float32)
+    img[..., 0] = np.arange(100).reshape(10, 10)            # 0..99
+    img[..., 1] = np.arange(100).reshape(10, 10) * 100.0    # 0..9900
+    out, _ = ops.normalize_percentile(img, per_channel=True)
+    # Both channels rescaled into the same [0, 1] band despite 100× scale gap.
+    assert float(out[..., 0].max()) == pytest.approx(1.0)
+    assert float(out[..., 1].max()) == pytest.approx(1.0)
+
+
+def test_percentile_valid_mask_excludes_padded_margin():
+    """Pixels outside ``valid`` shouldn't drag the low/high percentiles."""
+    img = np.zeros((20, 20), dtype=np.float32)
+    img[5:15, 5:15] = np.arange(100, dtype=np.float32).reshape(10, 10) + 50.0
+    valid = np.zeros_like(img, dtype=np.uint8)
+    valid[5:15, 5:15] = 1
+    out_with, _ = ops.normalize_percentile(img, valid=valid, per_channel=False)
+    out_without, _ = ops.normalize_percentile(img, per_channel=False)
+    # With valid mask: the 0-padded margin pixels saturate at 0 but don't define
+    # the low end. Without: the 0-padded pixels ARE the low end, compressing
+    # the interior into a smaller fraction of the range.
+    interior_with = out_with[5:15, 5:15]
+    interior_without = out_without[5:15, 5:15]
+    assert float(interior_with.max() - interior_with.min()) > \
+           float(interior_without.max() - interior_without.min())
+
+
+def test_bg_subtract_floor_and_high():
+    img = np.linspace(10.0, 110.0, 100, dtype=np.float32).reshape(10, 10)
+    out, meta = ops.normalize_bg_subtract(
+        img, bg_percentile=10.0, high_percentile=99.0, per_channel=False
+    )
+    assert float(out.min()) == pytest.approx(0.0)
+    # Output above bg-floor + span should land near 1.0; clipping floor at 0.
+    assert float(out.max()) >= 0.99
+    assert meta["stats"][0]["bg"] == pytest.approx(np.percentile(img, 10))
+
+
+def test_bg_subtract_per_channel():
+    img = np.zeros((10, 10, 2), dtype=np.float32)
+    img[..., 0] = np.arange(100).reshape(10, 10) + 500.0
+    img[..., 1] = np.arange(100).reshape(10, 10) + 5.0
+    out, _ = ops.normalize_bg_subtract(img, per_channel=True)
+    # Both channels brought down to a comparable floor near 0.
+    assert float(out[..., 0].min()) == pytest.approx(0.0)
+    assert float(out[..., 1].min()) == pytest.approx(0.0)
+
+
+def test_background_subtraction_residual_rescaled_to_unit_p99():
+    """The value at the p99 of the residual maps to ~1.0 in the output.
+
+    (The max can exceed 1.0 — the op clips only at 0, not at 1 — so we test
+    the p99 invariant, which is what the rescale is defined to do.)
+    """
+    rng = np.random.default_rng(0)
+    img = rng.normal(loc=50.0, scale=2.0, size=(40, 40)).astype(np.float32)
+    # Sprinkle a moderate blob covering many pixels so p99 lands within it.
+    img[10:30, 10:30] += 80.0
+    out, meta = ops.background_subtraction(img, radius=8, per_channel=True)
+    assert out.shape == img.shape
+    assert float(out.min()) >= 0.0
+    # After rescale the p99 of the OUTPUT equals 1.0 (up to clipping at 0).
+    assert float(np.percentile(out, 99)) == pytest.approx(1.0, abs=1e-2)
+    assert meta["radius"] == 8
+    assert meta["method"] == "tophat"
+    assert "high" in meta["stats"][0]
+
+
+def test_background_subtraction_default_radius_is_25():
+    """Sanity: the new default matches the post-eval recommendation."""
+    import inspect
+    sig = inspect.signature(ops.background_subtraction)
+    assert sig.parameters["radius"].default == 25
 
 
 def test_pad_constant_centres_input():
@@ -198,18 +258,26 @@ def test_build_pipeline_skip_target_does_no_padding():
     assert meta["steps"] == []
 
 
-def test_build_pipeline_with_explicit_pad_and_zscore():
+def test_build_pipeline_with_explicit_pad_and_percentile():
     p = build_pipeline({
         "target_shape_strategy": "explicit",
         "explicit_shape": [16, 16],
         "padding_method": "constant",
-        "normalize": "zscore",
+        "normalize": "percentile",
     })
     img = (np.random.randn(8, 8) * 4 + 50).astype(np.float32)
     out, meta = p.apply(img)
     assert out.shape == (16, 16)
     step_names = [s["step"] for s in meta["steps"]]
-    assert step_names == ["pad_to", "normalize_zscore"]
+    assert step_names == ["pad_to", "normalize_percentile"]
+
+
+def test_build_pipeline_with_bg_subtract():
+    p = build_pipeline({
+        "target_shape_strategy": "none",
+        "normalize": "bg_subtract",
+    })
+    assert [s.name for s in p.steps] == ["normalize_bg_subtract"]
 
 
 def test_build_pipeline_mean_strategy_uses_summary():
@@ -403,6 +471,6 @@ def test_pipeline_per_image_square_keeps_normalize_after():
         "padding_method": "constant",
         "post_resize_strategy": "explicit",
         "post_resize_value": 16,
-        "normalize": "zscore",
+        "normalize": "percentile",
     })
-    assert [s.name for s in p.steps] == ["pad_to_square", "resize_to", "normalize_zscore"]
+    assert [s.name for s in p.steps] == ["pad_to_square", "resize_to", "normalize_percentile"]

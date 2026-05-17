@@ -38,6 +38,36 @@ const router = createRouter({
             ]
         },
         {
+            path: '/popout/gallery',
+            name: 'popout-gallery',
+            component: () => import('../views/workspace/GalleryView.vue'),
+            meta: { layout: 'popout', tabId: 'gallery' },
+        },
+        {
+            path: '/popout/classes',
+            name: 'popout-classes',
+            component: () => import('../views/workspace/ClassesView.vue'),
+            meta: { layout: 'popout', tabId: 'classes' },
+        },
+        {
+            path: '/popout/clusters',
+            name: 'popout-clusters',
+            component: () => import('../views/workspace/ClustersView.vue'),
+            meta: { layout: 'popout', tabId: 'clusters' },
+        },
+        {
+            path: '/popout/segmentation',
+            name: 'popout-segmentation',
+            component: () => import('../views/workspace/SegmentationView.vue'),
+            meta: { layout: 'popout', tabId: 'segmentation' },
+        },
+        {
+            path: '/popout/analysis',
+            name: 'popout-analysis',
+            component: () => import('../views/workspace/AnalysisView.vue'),
+            meta: { layout: 'popout', tabId: 'analysis' },
+        },
+        {
             path: '/sessions',
             name: 'sessions',
             component: () => import('../views/SessionsView.vue'),
@@ -67,6 +97,9 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+    // Popouts don't redirect — they hydrate their session from localStorage /
+    // IPC sync. Until then the workspace view just renders empty.
+    if (to.path.startsWith('/popout')) return
     if (to.path.startsWith('/workspace') || to.path.startsWith('/export')) {
         const session = useSessionStore()
         if (!session.hasCurrentSession) {

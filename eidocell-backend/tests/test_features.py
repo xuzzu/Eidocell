@@ -145,6 +145,37 @@ def test_features_file_created(client, session_with_masks):
     assert vectors.shape[1] == 15
 
 
+def test_upsert_two_methods_different_dims(tmp_path):
+    """Two methods with different feature_dim must coexist on the same session.
+
+    Regression: previously stored as one `features_{sid}` table with a
+    fixed_size_list[dim] vector column, so a second method with a different dim
+    blew up inside Lance's merge_insert spill executor.
+    """
+    sid = "testmultidim01"
+    try:
+        ids = [f"s{i:02d}" for i in range(5)]
+        vecs_15 = np.random.rand(5, 15).astype(np.float32)
+        vecs_576 = np.random.rand(5, 576).astype(np.float32)
+
+        lance_features.upsert_features(
+            sid, "morphological",
+            [{"sample_id": ids[i], "vector": vecs_15[i]} for i in range(5)],
+        )
+        # Used to raise: lance error: LanceError(IO): Execution error: Spill has sent an error
+        lance_features.upsert_features(
+            sid, "mobilenetv3",
+            [{"sample_id": ids[i], "vector": vecs_576[i]} for i in range(5)],
+        )
+
+        _, m_vecs = lance_features.load_all_vectors(sid, "morphological")
+        _, d_vecs = lance_features.load_all_vectors(sid, "mobilenetv3")
+        assert m_vecs.shape == (5, 15)
+        assert d_vecs.shape == (5, 576)
+    finally:
+        lance_features.delete_session(sid)
+
+
 def test_clustering_works_after_extraction(client, session_with_masks):
     """End-to-end: segmentation → feature extraction → clustering."""
     sid = session_with_masks["id"]

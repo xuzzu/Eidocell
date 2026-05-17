@@ -83,7 +83,7 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
         explicit_shape: [int, int] | None
         padding_method: "constant" | "poisson" | "replicate"
         resize: bool
-        normalize: "none" | "minmax" | "zscore"
+        normalize: "none" | "percentile" | "bg_subtract"
         align_channels: bool
         align_reference_index: int
         compensation_matrix: list[list[float]] | None
@@ -105,8 +105,8 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
             name="background_subtraction",
             fn=_ops.background_subtraction,
             params={
-                "radius": int(cfg.get("background_subtraction_radius", 50)),
-                "per_channel": bool(cfg.get("background_subtraction_per_channel", True))
+                "radius": int(cfg.get("background_subtraction_radius", 25)),
+                "per_channel": bool(cfg.get("background_subtraction_per_channel", True)),
             },
         ))
 
@@ -174,12 +174,12 @@ def build_pipeline(config: dict, *, shape_summary: dict | None = None) -> Pipeli
             ))
 
     norm = cfg.get("normalize", "none")
-    if norm == "minmax":
-        steps.append(Step(name="normalize_minmax", fn=_ops.normalize_minmax, params={
+    if norm == "percentile":
+        steps.append(Step(name="normalize_percentile", fn=_ops.normalize_percentile, params={
             "per_channel": bool(cfg.get("normalize_per_channel", True)),
         }))
-    elif norm == "zscore":
-        steps.append(Step(name="normalize_zscore", fn=_ops.normalize_zscore, params={
+    elif norm == "bg_subtract":
+        steps.append(Step(name="normalize_bg_subtract", fn=_ops.normalize_bg_subtract, params={
             "per_channel": bool(cfg.get("normalize_per_channel", True)),
         }))
 

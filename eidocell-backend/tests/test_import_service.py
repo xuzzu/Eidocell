@@ -83,7 +83,7 @@ def test_import_folder_with_channel_grouping_and_preprocessing(client, tmp_path)
         "preprocessing": {
             "target_shape_strategy": "max",
             "padding_method": "constant",
-            "normalize": "zscore",
+            "normalize": "percentile",
         },
     })
     assert resp.status_code == 202, resp.text

@@ -8,7 +8,7 @@ SourceKind = Literal["folder", "cif", "rif"]
 TargetShapeStrategy = Literal[
     "none", "min", "max", "mean", "explicit", "per_image_square"
 ]
-NormalizeStrategy = Literal["none", "minmax", "zscore"]
+NormalizeStrategy = Literal["none", "percentile", "bg_subtract"]
 PaddingMethod = Literal["constant", "poisson", "replicate"]
 PostResizeStrategy = Literal[
     "none", "explicit", "min_longest", "max_longest", "mean_longest"
@@ -23,7 +23,7 @@ class PreprocessingConfig(BaseModel):
     normalize: NormalizeStrategy = "none"
     normalize_per_channel: bool = True
     background_subtraction: bool = False
-    background_subtraction_radius: int = 50
+    background_subtraction_radius: int = 25
     background_subtraction_per_channel: bool = True
     align_channels: bool = False
     align_reference_index: int = 0
