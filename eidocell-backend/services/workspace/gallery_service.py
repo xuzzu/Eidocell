@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session as DbSession
 
 from core.notifications import notification_manager
@@ -288,19 +288,22 @@ def get_channel_thumbnail_path(
 
 
 def list_classes(db: DbSession, session_id: str) -> list[dict]:
-    classes = db.query(SampleClass).filter(SampleClass.session_id == session_id).all()
-    results = []
-    for c in classes:
-        count = db.query(func.count(Sample.id)).filter(
-            Sample.class_id == c.id, Sample.is_active == True
-        ).scalar()
-        results.append({
-            "id": c.id,
-            "name": c.name,
-            "color": c.color,
-            "sample_count": count,
-        })
-    return results
+    rows = (
+        db.query(
+            SampleClass.id,
+            SampleClass.name,
+            SampleClass.color,
+            func.count(case((Sample.is_active == True, 1))).label("sample_count"),
+        )
+        .outerjoin(Sample, Sample.class_id == SampleClass.id)
+        .filter(SampleClass.session_id == session_id)
+        .group_by(SampleClass.id, SampleClass.name, SampleClass.color)
+        .all()
+    )
+    return [
+        {"id": r.id, "name": r.name, "color": r.color, "sample_count": int(r.sample_count or 0)}
+        for r in rows
+    ]
 
 
 def create_class(db: DbSession, session_id: str, data: ClassCreate) -> dict:
@@ -412,7 +415,7 @@ def list_sortable_attributes(db: DbSession, session_id: str) -> list[dict]:
     Each entry: ``{name, channel_index, channel_name, value}`` where ``value`` is the
     sort_by token (e.g. ``attr:area:ch:0``). One entry per (attr, channel) with a mask.
     """
-    from models.models import Mask, Session as SessionModel
+    from models.models import Session as SessionModel
     session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not session:
         return []
@@ -420,15 +423,13 @@ def list_sortable_attributes(db: DbSession, session_id: str) -> list[dict]:
     if not names:
         return []
     channel_indices_with_mask: set[int] = {
-        int(ci) for (ci,) in db.query(Mask.channel_index).distinct().all()
+        int(ci) for (ci,) in (
+            db.query(Mask.channel_index)
+            .join(Sample, Sample.id == Mask.sample_id)
+            .filter(Sample.session_id == session_id)
+            .distinct()
+        )
         if ci is not None
-    }
-    # Restrict to masks that actually belong to this session via samples.
-    from models.models import Sample
-    session_sample_ids = {sid for (sid,) in db.query(Sample.id).filter(Sample.session_id == session_id).all()}
-    channel_indices_with_mask = {
-        int(ci) for (sid, ci) in db.query(Mask.sample_id, Mask.channel_index).all()
-        if sid in session_sample_ids and ci is not None
     }
     if not channel_indices_with_mask:
         channel_indices_with_mask = {0}

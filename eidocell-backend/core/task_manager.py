@@ -1,8 +1,10 @@
 """Background task manager for long-running operations."""
 
 import logging
+import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -55,12 +57,27 @@ class TaskInfo:
 logger = logging.getLogger("eidocell.tasks")
 
 
-class TaskManager:
-    """Thread-based task manager for background operations."""
+# Cap worker concurrency. Workloads (import, segmentation, clustering) are
+# CPU-and-IO heavy; oversubscribing on a typical workstation hurts throughput
+# more than it helps. Override via EIDOCELL_TASK_WORKERS if you know better.
+_DEFAULT_MAX_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+_MAX_WORKERS = int(os.environ.get("EIDOCELL_TASK_WORKERS", _DEFAULT_MAX_WORKERS))
 
-    def __init__(self):
+# Auto-cleanup keeps memory bounded; manual /tasks/cleanup remains available.
+_AUTO_CLEANUP_KEEP = 50
+_AUTO_CLEANUP_EVERY = 25  # run cleanup after every N submits
+
+
+class TaskManager:
+    """Thread-pool-backed task manager for background operations."""
+
+    def __init__(self, max_workers: int = _MAX_WORKERS):
         self._tasks: dict[str, TaskInfo] = {}
         self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="eidocell-task"
+        )
+        self._submit_count = 0
 
     def submit(
         self,
@@ -74,44 +91,54 @@ class TaskManager:
 
         with self._lock:
             self._tasks[task_id] = task
+            self._submit_count += 1
+            if self._submit_count % _AUTO_CLEANUP_EVERY == 0:
+                self._cleanup_completed_locked(_AUTO_CLEANUP_KEEP)
 
-        thread = threading.Thread(
-            target=self._run_task,
-            args=(task_id, func, args, kwargs),
-            daemon=True,
-        )
-        thread.start()
+        self._executor.submit(self._run_task, task_id, func, args, kwargs)
         logger.info("Task submitted: %s [%s]", name, task_id)
         return task_id
 
-    def _run_task(self, task_id: str, func: Callable, args: tuple, kwargs: dict):
-        task = self._tasks[task_id]
-        task.status = TaskStatus.RUNNING
+    def _set_status(self, task: TaskInfo, status: TaskStatus) -> None:
+        with self._lock:
+            task.status = status
 
-        # Inject progress callback
+    def _run_task(self, task_id: str, func: Callable, args: tuple, kwargs: dict):
+        with self._lock:
+            task = self._tasks[task_id]
+        self._set_status(task, TaskStatus.RUNNING)
+
         def on_progress(progress: int, total: int, message: str = ""):
-            if task.status == TaskStatus.CANCELLED:
-                raise TaskCancelledException("Task was cancelled")
-            task.progress = progress
-            task.total = total
-            task.message = message
+            with self._lock:
+                if task.status == TaskStatus.CANCELLED:
+                    raise TaskCancelledException("Task was cancelled")
+                task.progress = progress
+                task.total = total
+                task.message = message
 
         def is_cancelled():
-            return task.status == TaskStatus.CANCELLED
+            with self._lock:
+                return task.status == TaskStatus.CANCELLED
 
         try:
             result = func(*args, on_progress=on_progress, is_cancelled=is_cancelled, **kwargs)
-            task.result = result
-            if task.status != TaskStatus.CANCELLED:
-                task.status = TaskStatus.COMPLETED
+            with self._lock:
+                task.result = result
+                if task.status != TaskStatus.CANCELLED:
+                    task.status = TaskStatus.COMPLETED
+                    completed_normally = True
+                else:
+                    completed_normally = False
+            if completed_normally:
                 logger.info("Task completed: %s [%s]", task.name, task_id)
                 from core.notifications import notification_manager
                 notification_manager.broadcast("Task Completed", f"Successfully finished {task.name}.", level="success")
         except TaskCancelledException:
             logger.info("Task cancelled: %s [%s]", task.name, task_id)
         except Exception as e:
-            task.error = str(e)
-            task.status = TaskStatus.FAILED
+            with self._lock:
+                task.error = str(e)
+                task.status = TaskStatus.FAILED
             # logger.exception attaches the full traceback (and any chained
             # cause from native Rust panics surfaced through Lance/DataFusion),
             # which `logger.error("...: %s", e)` would otherwise truncate.
@@ -119,16 +146,18 @@ class TaskManager:
             from core.notifications import notification_manager
             notification_manager.broadcast("Task Failed", f"Failed to run {task.name}: {e}", level="error")
         finally:
-            task.completed_at = datetime.now(timezone.utc)
+            with self._lock:
+                task.completed_at = datetime.now(timezone.utc)
 
     def get_task(self, task_id: str) -> TaskInfo | None:
-        return self._tasks.get(task_id)
+        with self._lock:
+            return self._tasks.get(task_id)
 
     def cancel_task(self, task_id: str) -> bool:
-        task = self.get_task(task_id)
-        if not task:
-            return False
         with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
             if task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
                 task.status = TaskStatus.CANCELLED
                 return True
@@ -138,18 +167,22 @@ class TaskManager:
         with self._lock:
             return list(self._tasks.values())
 
+    def _cleanup_completed_locked(self, keep_last: int) -> int:
+        """Caller MUST hold self._lock."""
+        completed = [
+            t for t in self._tasks.values()
+            if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+        ]
+        completed.sort(key=lambda t: t.completed_at or t.created_at, reverse=True)
+        to_remove = completed[keep_last:]
+        for t in to_remove:
+            del self._tasks[t.id]
+        return len(to_remove)
+
     def cleanup_completed(self, keep_last: int = 20) -> int:
         """Remove old completed/failed tasks, keeping the most recent ones."""
         with self._lock:
-            completed = [
-                t for t in self._tasks.values()
-                if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
-            ]
-            completed.sort(key=lambda t: t.completed_at or t.created_at, reverse=True)
-            to_remove = completed[keep_last:]
-            for t in to_remove:
-                del self._tasks[t.id]
-            return len(to_remove)
+            return self._cleanup_completed_locked(keep_last)
 
 
 # Global singleton

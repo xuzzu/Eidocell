@@ -1,6 +1,5 @@
 """Analysis service: plots, gates, and active sample filtering."""
 
-import logging
 import math
 import random
 import struct
@@ -14,8 +13,6 @@ from sqlalchemy.orm import Session as DbSession
 from core.storage import mask_attrs as lance_mask_attrs
 from models.models import Gate, Plot, Sample, SampleClass, Session, sample_clusters
 from schemas.workspace.analysis import _validate_gate_definition
-
-logger = logging.getLogger("eidocell.analysis")
 
 
 # ── Plot CRUD ───────────────────────────────────────────────────────────
@@ -184,10 +181,10 @@ def _plot_to_out(plot: Plot, gate_count: int) -> dict:
 
 
 def _fetch_plot_rows(
-    db: DbSession, plot: Plot, axes: list[str]
+    db: DbSession, plot: Plot
 ) -> tuple[list[Sample], dict[str, SampleClass | None], dict[str, dict]]:
     """Fetch all session samples (or restricted by parent gate) joined with class info,
-    plus per-sample attrs for the requested axes."""
+    plus per-sample attrs."""
     query = (
         db.query(Sample, SampleClass)
         .outerjoin(SampleClass, Sample.class_id == SampleClass.id)
@@ -225,7 +222,17 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
         axes = [params["x_variable"], params["y_variable"]]
 
     color_var = params.get("color_variable")
-    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot, axes)
+    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot)
+
+    cluster_ids_by_sid: dict[str, list[str]] = {}
+    if color_var == "cluster" and samples:
+        rows = (
+            db.query(sample_clusters.c.sample_id, sample_clusters.c.cluster_id)
+            .filter(sample_clusters.c.sample_id.in_([s.id for s in samples]))
+            .all()
+        )
+        for sid, cid in rows:
+            cluster_ids_by_sid.setdefault(sid, []).append(cid)
 
     data = []
     for sample in samples:
@@ -241,21 +248,13 @@ def get_plot_data(db: DbSession, plot_id: str, *, max_points: int = 0) -> dict:
         if skip:
             continue
         cls = class_by_sid.get(sample.id)
-        point = {
+        data.append({
             "sample_id": sample.id,
             "values": values,
             "class_name": cls.name if cls else None,
             "class_color": cls.color if cls else None,
-            "cluster_ids": [],
-        }
-        if color_var == "cluster":
-            cluster_ids = (
-                db.query(sample_clusters.c.cluster_id)
-                .filter(sample_clusters.c.sample_id == sample.id)
-                .all()
-            )
-            point["cluster_ids"] = [cid for (cid,) in cluster_ids]
-        data.append(point)
+            "cluster_ids": cluster_ids_by_sid.get(sample.id, []),
+        })
 
     total = len(data)
     if max_points > 0 and total > max_points:
@@ -284,7 +283,7 @@ def get_plot_data_binary(db: DbSession, plot_id: str, *, max_points: int = 50000
     else:
         axes = [params["x_variable"], params["y_variable"]]
 
-    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot, axes)
+    samples, class_by_sid, attrs_by_sid = _fetch_plot_rows(db, plot)
 
     sample_ids: list[str] = []
     x_vals: list[float] = []

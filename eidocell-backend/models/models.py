@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Boolean, Integer, Float, ForeignKey, Table, Column, DateTime, JSON, UniqueConstraint
+from sqlalchemy import String, Boolean, Integer, Float, ForeignKey, Table, Column, DateTime, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.session import Base
@@ -38,7 +38,7 @@ class Session(Base):
     channel_count: Mapped[int] = mapped_column(Integer, default=1)
     channel_names: Mapped[list | None] = mapped_column(JSON, nullable=True)
     selected_gate_id: Mapped[str | None] = mapped_column(
-        ForeignKey("gates.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("gates.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # Relationships
@@ -70,6 +70,10 @@ class SampleClass(Base):
 
 class Sample(Base):
     __tablename__ = "samples"
+    __table_args__ = (
+        Index("ix_samples_session_active", "session_id", "is_active"),
+        Index("ix_samples_filename", "filename"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)
@@ -200,6 +204,9 @@ class Gate(Base):
 
 class Import(Base):
     __tablename__ = "imports"
+    __table_args__ = (
+        Index("ix_imports_session_created", "session_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id"), nullable=False, index=True)

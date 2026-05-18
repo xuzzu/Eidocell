@@ -127,14 +127,9 @@ def _background_pipeline(
         session_id, feature_method, sample_ids
     )
     if active_features.shape[0] == 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No features available for method '{feature_method}'",
-        )
-    found_set = set(found_ids)
-    aligned_data = [sd for sd in sample_data if sd["id"] in found_set]
-    # _load_vectors returns ids in input order subset; sample_data may diverge if
-    # any sample failed extraction. Rebuild aligned_data to match found_ids order.
+        raise ValueError(f"No features available for method '{feature_method}'")
+    # load_vectors returns ids as a subset of sample_ids; sample_data may diverge
+    # if any sample failed extraction. Align to found_ids order.
     by_id = {sd["id"]: sd for sd in sample_data}
     aligned_data = [by_id[sid] for sid in found_ids]
 

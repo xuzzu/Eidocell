@@ -83,10 +83,7 @@ def _background_dr(
             session_id, feature_method, sample_ids
         )
         if features.shape[0] == 0:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No features available for method '{feature_method}'",
-            )
+            raise ValueError(f"No features available for method '{feature_method}'")
         meta_by_id = {s["id"]: s for s in sample_meta}
         aligned_meta = [meta_by_id[sid] for sid in found_ids]
 

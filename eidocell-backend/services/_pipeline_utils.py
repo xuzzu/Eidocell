@@ -197,15 +197,16 @@ def extract_features_to_lance(
 def clean_zero_variance(
     features: np.ndarray, *, raise_on_all_zero: bool = False
 ) -> np.ndarray:
-    """Drop columns with zero variance. Optionally raise HTTP 400 if all are zero."""
+    """Drop columns with zero variance. Optionally raise ValueError if all are zero.
+
+    Called from worker threads; raising HTTPException here is meaningless since
+    the exception never reaches the HTTP layer.
+    """
     stds = np.std(features, axis=0)
     valid = stds > 0
     if not np.any(valid):
         if raise_on_all_zero:
-            raise HTTPException(
-                status_code=400,
-                detail="All features have zero variance. Cannot proceed.",
-            )
+            raise ValueError("All features have zero variance. Cannot proceed.")
         return features
     return features[:, valid]
 

@@ -239,16 +239,21 @@ def _apply_model_to_session(
             classes_created.append(class_name)
 
     sample_by_id = {s.id: s for s in unlabeled_samples}
-    assignments: dict[str, int] = {}
+    sample_ids_by_class: dict[str, list[str]] = {}
     for sid, pred_idx in zip(found_ids, predictions):
-        sample = sample_by_id.get(sid)
-        if sample is None:
+        if sid not in sample_by_id:
             continue
         class_name = label_mapping.get(str(int(pred_idx)))
         if class_name is None:
             continue
-        sample.class_id = class_name_to_id[class_name]
-        assignments[class_name] = assignments.get(class_name, 0) + 1
+        sample_ids_by_class.setdefault(class_name, []).append(sid)
+
+    assignments: dict[str, int] = {}
+    for class_name, sids in sample_ids_by_class.items():
+        db.query(Sample).filter(Sample.id.in_(sids)).update(
+            {"class_id": class_name_to_id[class_name]}, synchronize_session=False
+        )
+        assignments[class_name] = len(sids)
 
     db.commit()
     logger.info(

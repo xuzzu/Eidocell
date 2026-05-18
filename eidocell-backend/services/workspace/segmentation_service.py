@@ -357,9 +357,6 @@ def _background_segment(
     on_progress(0, total, "Starting segmentation...")
 
     for i, sd in enumerate(sample_data):
-        if is_cancelled and is_cancelled():
-            pass  # TaskCancelledException raised by on_progress
-
         src_path = Path(sd["path"])
 
         try:

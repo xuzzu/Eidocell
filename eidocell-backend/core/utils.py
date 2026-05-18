@@ -1,8 +1,4 @@
-import logging
 import random
-
-
-logger = logging.getLogger("eidocell")
 
 
 def random_color() -> str:

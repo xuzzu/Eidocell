@@ -12,7 +12,7 @@ from core.processors.inference.clustering import get_processor as get_clustering
 from core.storage import features as lance_features
 from core.storage import mask_attrs as lance_mask_attrs
 from core.utils import get_active_samples, random_color
-from models.models import Cluster, Sample, SampleClass, Session, sample_clusters
+from models.models import Cluster, Mask, Sample, SampleClass, Session, sample_clusters
 from services._pipeline_utils import compute_quality
 from services.workspace.classes_service import _STAT_ATTRIBUTES
 
@@ -180,9 +180,17 @@ def get_cluster_samples(
     total = base.count()
     samples = base.order_by(Sample.filename).offset(offset).limit(limit).all()
 
-    items = []
-    for s in samples:
-        items.append({
+    sample_ids = [s.id for s in samples]
+    has_mask_sids: set[str] = set()
+    if sample_ids:
+        has_mask_sids = {
+            sid for (sid,) in db.query(Mask.sample_id)
+            .filter(Mask.sample_id.in_(sample_ids))
+            .distinct()
+        }
+
+    items = [
+        {
             "id": s.id,
             "filename": s.filename,
             "path": s.path,
@@ -190,8 +198,10 @@ def get_cluster_samples(
             "class_id": s.class_id,
             "class_name": s.sample_class.name if s.sample_class else None,
             "class_color": s.sample_class.color if s.sample_class else None,
-            "has_mask": len(s.masks) > 0,
-        })
+            "has_mask": s.id in has_mask_sids,
+        }
+        for s in samples
+    ]
     return items, total
 
 
@@ -358,17 +368,21 @@ def assign_clusters_to_class(
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
 
-    updated = 0
-    for cid in cluster_ids:
-        samples = (
-            db.query(Sample)
-            .join(sample_clusters, Sample.id == sample_clusters.c.sample_id)
-            .filter(sample_clusters.c.cluster_id == cid, Sample.is_active == True)
-            .all()
+    sample_ids = [
+        sid for (sid,) in (
+            db.query(sample_clusters.c.sample_id)
+            .filter(sample_clusters.c.cluster_id.in_(cluster_ids))
+            .distinct()
         )
-        for s in samples:
-            s.class_id = class_id
-            updated += 1
+    ]
+    if sample_ids:
+        updated = (
+            db.query(Sample)
+            .filter(Sample.id.in_(sample_ids), Sample.is_active == True)
+            .update({"class_id": class_id}, synchronize_session=False)
+        )
+    else:
+        updated = 0
 
     db.commit()
 

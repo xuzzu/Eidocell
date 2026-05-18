@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,11 +50,15 @@ def _check_storage_version() -> None:
     STORAGE_VERSION_FILE.write_text(str(STORAGE_VERSION))
 
 
-_check_storage_version()
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _check_storage_version()
+    Base.metadata.create_all(bind=engine)
+    yield
+    engine.dispose()
 
 
-app = FastAPI(title="EidoCell", version="0.1.0")
+app = FastAPI(title="EidoCell", version="0.1.0", lifespan=lifespan)
 
 _default_origins = [
     "http://localhost:5173",
